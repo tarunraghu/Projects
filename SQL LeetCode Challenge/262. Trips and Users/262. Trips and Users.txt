@@ -1,0 +1,32 @@
+https://leetcode.com/problems/trips-and-users/description/
+
+WITH cte_client_user
+AS (
+	SELECT users_id AS client_id
+	FROM Users U
+	WHERE U.banned = 'No'
+		AND ROLE = 'client'
+	)
+	,cte_driver_user
+AS (
+	SELECT users_id AS driver_id
+	FROM Users U
+	WHERE U.banned = 'No'
+		AND ROLE = 'driver'
+	)
+	,cte_trips
+AS (
+	SELECT request_at AS Day
+		,CASE 
+			WHEN STATUS = 'completed'
+				THEN 0
+			ELSE 1
+			END AS cancellation_flag
+	FROM Trips T
+	INNER JOIN cte_client_user CU ON T.client_id = CU.client_id
+	INNER JOIN cte_driver_user DU ON T.driver_id = DU.driver_id
+	)
+SELECT Day
+	,round(SUM(cast(cancellation_flag AS FLOAT)) / COUNT(cast(cancellation_flag AS FLOAT)), 2) AS 'Cancellation Rate'
+FROM cte_trips
+GROUP BY Day
