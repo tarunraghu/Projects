@@ -1,3 +1,5 @@
+https://leetcode.com/problems/top-travellers/
+
 select name, COALESCE(sum(distance),0) as travelled_distance from Users U
 left join Rides R
 on U.id = R.user_id
