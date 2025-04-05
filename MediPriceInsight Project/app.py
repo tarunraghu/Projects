@@ -223,12 +223,20 @@ def create_hospital_charges_table():
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
+            modifiers VARCHAR(255),
+            setting VARCHAR(255),
+            drug_unit_of_measurement VARCHAR(50),
+            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
             standard_charge_gross NUMERIC,
+            standard_charge_discounted_cash NUMERIC,
             standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_min NUMERIC,
-            standard_charge_max NUMERIC,
+            standard_charge_negotiated_percentage NUMERIC,
+            standard_charge_negotiated_algorithm TEXT,
+            standard_charge_methodology TEXT,
+            estimated_amount NUMERIC,
+            additional_payer_notes TEXT,
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -265,12 +273,20 @@ def create_hospital_charges_archive_table():
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
+            modifiers VARCHAR(255),
+            setting VARCHAR(255),
+            drug_unit_of_measurement VARCHAR(50),
+            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
             standard_charge_gross NUMERIC,
+            standard_charge_discounted_cash NUMERIC,
             standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_min NUMERIC,
-            standard_charge_max NUMERIC,
+            standard_charge_negotiated_percentage NUMERIC,
+            standard_charge_negotiated_algorithm TEXT,
+            standard_charge_methodology TEXT,
+            estimated_amount NUMERIC,
+            additional_payer_notes TEXT,
             archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             original_created_at TIMESTAMP,
             archive_reason TEXT
@@ -642,89 +658,229 @@ def read_data_file_preview(file_path, num_rows=5):
         logger.error(f"Error reading data file preview: {str(e)}")
         raise
 
-def process_hospital_data(df):
+def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
-        # Find all code and code type columns
-        code_columns = sorted([col for col in df.columns if col.startswith('code|') and not col.endswith('|type')])
-        code_type_columns = sorted([col for col in df.columns if col.endswith('|type')])
-        
-        logger.info(f"Found code columns: {code_columns}")
-        logger.info(f"Found code type columns: {code_type_columns}")
-        
-        # Initialize variables for code and code_type
-        selected_code_col = None
-        selected_code_type_col = None
-        
-        # Find the first code column that has CPT type
-        for code_col in code_columns:
-            base_name = code_col.split('|')[1]  # Extract the number part (e.g., '1' from 'code|1')
-            type_col = f"code|{base_name}|type"
+        if ingestion_strategy == 'type2':
+            if spark is None:
+                raise ValueError("Spark session is required for Type 2 ingestion")
+                
+            # Find the base columns that we want to keep as-is (columns without '|')
+            base_columns = [col for col in df.columns if not '|' in col]
             
-            if type_col in code_type_columns:
+            # Remove unwanted columns for Type 2 ingestion
+            columns_to_remove = [
+                'modifiers', 'setting', 'drug_unit_of_measurement', 
+                'drug_type_of_measurement', 'additional_generic_notes'
+            ]
+            base_columns = [col for col in base_columns if col not in columns_to_remove]
+            
+            # Find all type columns (columns ending with |TYPE)
+            type_columns = [col for col in df.columns if col.upper().endswith('|TYPE')]
+            selected_type_col = None
+            selected_code_col = None
+            
+            # Find the type column that has CPT value
+            for type_col in type_columns:
                 # Check if this column has 'CPT' value
                 cpt_count = df.filter(df[type_col].rlike('(?i)CPT')).count()
-                logger.info(f"Column {type_col} has {cpt_count} CPT values")
-                
                 if cpt_count > 0:
-                    selected_code_col = code_col
-                    selected_code_type_col = type_col
-                    logger.info(f"Selected code column: {selected_code_col} with type column: {selected_code_type_col}")
-                    break
-        
-        if not selected_code_col or not selected_code_type_col:
-            error_msg = "No code column with CPT type found"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Select and rename required columns
-        required_columns = {
-            'description': 'description',
-            selected_code_col: 'code',
-            selected_code_type_col: 'code_type',
-            'payer_name': 'payer_name',
-            'plan_name': 'plan_name',
-            'standard_charge|gross': 'standard_charge_gross',
-            'standard_charge|negotiated_dollar': 'standard_charge_negotiated_dollar',
-            'standard_charge|min': 'standard_charge_min',
-            'standard_charge|max': 'standard_charge_max'
-        }
-        
-        # Filter out None keys (in case some columns weren't found)
-        required_columns = {k: v for k, v in required_columns.items() if k is not None}
-        
-        # Create a new DataFrame with only CPT rows and required columns
-        df_cpt = df.filter(df[selected_code_type_col].rlike('(?i)CPT'))
-        
-        if df_cpt.count() == 0:
-            error_msg = "No rows found with CPT code type"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        # Select and rename columns
-        for old_col, new_col in required_columns.items():
-            if old_col in df_cpt.columns:
-                df_cpt = df_cpt.withColumnRenamed(old_col, new_col)
-        
-        # Select only the required columns that exist
-        existing_columns = [col for col in required_columns.values() if col in df_cpt.columns]
-        df_cpt = df_cpt.select(*existing_columns)
-        
-        # Convert numeric columns
-        numeric_columns = ['standard_charge_gross', 'standard_charge_negotiated_dollar', 
-                         'standard_charge_min', 'standard_charge_max']
-        
-        for col in numeric_columns:
-            if col in df_cpt.columns:
-                df_cpt = df_cpt.withColumn(col, df_cpt[col].cast('double'))
-        
-        # Log the results
-        logger.info(f"Total rows in original data: {df.count()}")
-        logger.info(f"Total rows with CPT codes: {df_cpt.count()}")
-        logger.info(f"Final columns: {df_cpt.columns}")
-        
-        return df_cpt
-        
+                    selected_type_col = type_col
+                    # Get the corresponding code column by removing |TYPE
+                    code_col = type_col.rsplit('|', 1)[0]  # This will convert CODE|1|TYPE to CODE|1
+                    if code_col in df.columns:
+                        selected_code_col = code_col
+                        break
+            
+            if not selected_type_col or not selected_code_col:
+                error_msg = "No code column with CPT type found"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Add only the selected code and type columns to base columns
+            base_columns.append(selected_code_col)
+            base_columns.append(selected_type_col)
+            
+            # Add standard charge columns
+            if 'standard_charge|gross' in df.columns:
+                base_columns.append('standard_charge|gross')
+            if 'standard_charge|min' in df.columns:
+                base_columns.append('standard_charge|min')
+            if 'standard_charge|max' in df.columns:
+                base_columns.append('standard_charge|max')
+            
+            # Remove duplicate columns
+            base_columns = list(dict.fromkeys(base_columns))
+            
+            logger.info(f"Base columns: {base_columns}")
+            logger.info(f"Selected code column: {selected_code_col}")
+            logger.info(f"Selected type column: {selected_type_col}")
+            
+            # Group columns by payer and plan
+            payer_groups = {}
+            for col in df.columns:
+                if col not in base_columns and '|' in col:
+                    parts = col.split('|')
+                    if len(parts) >= 4 and parts[0].lower() == 'standard_charge':
+                        payer = parts[1]
+                        plan = parts[2]
+                        charge_type = parts[3].lower()
+                        
+                        # Skip the columns we want to ignore
+                        if charge_type in ['negotiated_percentage', 'negotiated_algorithm', 'methodology', 'discounted_cash']:
+                            continue
+                        
+                        key = f"{payer}|{plan}"
+                        if key not in payer_groups:
+                            payer_groups[key] = {
+                                'payer': payer,
+                                'plan': plan,
+                                'columns': {}
+                            }
+                        
+                        payer_groups[key]['columns'][charge_type] = col
+            
+            logger.info(f"Found payer groups: {payer_groups}")
+            
+            # Create the unpivot expression
+            unpivot_expr = []
+            for key, group in payer_groups.items():
+                # Only process if negotiated_dollar exists
+                if 'negotiated_dollar' in group['columns']:
+                    # Escape column names for SQL
+                    escaped_base_cols = [f"`{col}`" for col in base_columns]
+                    
+                    select_cols = [
+                        *escaped_base_cols,
+                        f"'{group['payer']}' as payer_name",
+                        f"'{group['plan']}' as plan_name",
+                        f"`{group['columns']['negotiated_dollar']}` as standard_charge_negotiated_dollar"
+                    ]
+                    
+                    # Add optional columns if they exist (excluding the ignored ones)
+                    optional_cols = {
+                        'estimated_amount': 'estimated_amount',
+                        'additional_payer_notes': 'additional_payer_notes'
+                    }
+                    
+                    for src, dest in optional_cols.items():
+                        if src in group['columns']:
+                            select_cols.append(f"`{group['columns'][src]}` as {dest}")
+                    
+                    # Add to unpivot expression
+                    unpivot_expr.append(f"""
+                        SELECT 
+                            {', '.join(select_cols)}
+                        FROM __this__
+                        WHERE `{group['columns']['negotiated_dollar']}` IS NOT NULL
+                    """)
+            
+            if not unpivot_expr:
+                logger.warning("No valid payer/plan/negotiated charge combinations found")
+                # Return the base data without unpivoting
+                return df.select(base_columns)
+            
+            # Combine all unpivot expressions
+            combined_sql = " UNION ALL ".join(unpivot_expr)
+            
+            logger.info(f"Generated SQL query: {combined_sql}")
+            
+            # Apply the transformation
+            df.createOrReplaceTempView("__this__")
+            df_final = spark.sql(combined_sql)
+            
+            # Convert numeric columns
+            numeric_columns = [
+                'standard_charge_gross', 'standard_charge_negotiated_dollar', 
+                'standard_charge_min', 'standard_charge_max', 'estimated_amount'
+            ]
+            
+            for col in numeric_columns:
+                if col in df_final.columns:
+                    df_final = df_final.withColumn(col, df_final[col].cast('double'))
+            
+            return df_final
+            
+        else:
+            # Original Type 1 processing logic
+            code_columns = sorted([col for col in df.columns if col.startswith('code|') and not col.endswith('|type')])
+            code_type_columns = sorted([col for col in df.columns if col.endswith('|type')])
+            
+            logger.info(f"Found code columns: {code_columns}")
+            logger.info(f"Found code type columns: {code_type_columns}")
+            
+            # Initialize variables for code and code_type
+            selected_code_col = None
+            selected_code_type_col = None
+            
+            # Find the first code column that has CPT type
+            for code_col in code_columns:
+                base_name = code_col.split('|')[1]  # Extract the number part (e.g., '1' from 'code|1')
+                type_col = f"code|{base_name}|type"
+                
+                if type_col in code_type_columns:
+                    # Check if this column has 'CPT' value
+                    cpt_count = df.filter(df[type_col].rlike('(?i)CPT')).count()
+                    logger.info(f"Column {type_col} has {cpt_count} CPT values")
+                    
+                    if cpt_count > 0:
+                        selected_code_col = code_col
+                        selected_code_type_col = type_col
+                        logger.info(f"Selected code column: {selected_code_col} with type column: {selected_code_type_col}")
+                        break
+            
+            if not selected_code_col or not selected_code_type_col:
+                error_msg = "No code column with CPT type found"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Select and rename required columns
+            required_columns = {
+                'description': 'description',
+                selected_code_col: 'code',
+                selected_code_type_col: 'code_type',
+                'payer_name': 'payer_name',
+                'plan_name': 'plan_name',
+                'standard_charge|gross': 'standard_charge_gross',
+                'standard_charge|negotiated_dollar': 'standard_charge_negotiated_dollar',
+                'standard_charge|min': 'standard_charge_min',
+                'standard_charge|max': 'standard_charge_max',
+                'modifiers': 'modifiers',
+                'setting': 'setting',
+                'drug_unit_of_measurement': 'drug_unit_of_measurement',
+                'drug_type_of_measurement': 'drug_type_of_measurement'
+            }
+            
+            # Filter out None keys (in case some columns weren't found)
+            required_columns = {k: v for k, v in required_columns.items() if k is not None}
+            
+            # Create a new DataFrame with only CPT rows and required columns
+            df_cpt = df.filter(df[selected_code_type_col].rlike('(?i)CPT'))
+            
+            if df_cpt.count() == 0:
+                error_msg = "No rows found with CPT code type"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Select and rename columns
+            for old_col, new_col in required_columns.items():
+                if old_col in df_cpt.columns:
+                    df_cpt = df_cpt.withColumnRenamed(old_col, new_col)
+            
+            # Select only the required columns that exist
+            existing_columns = [col for col in required_columns.values() if col in df_cpt.columns]
+            df_cpt = df_cpt.select(*existing_columns)
+            
+            # Convert numeric columns
+            numeric_columns = ['standard_charge_gross', 'standard_charge_negotiated_dollar', 
+                             'standard_charge_min', 'standard_charge_max']
+            
+            for col in numeric_columns:
+                if col in df_cpt.columns:
+                    df_cpt = df_cpt.withColumn(col, df_cpt[col].cast('double'))
+            
+            return df_cpt
+            
     except Exception as e:
         logger.error(f"Error processing hospital data: {str(e)}")
         logger.error(traceback.format_exc())
@@ -1173,6 +1329,9 @@ def preview_data():
                 'technical_details': f'File path {data_file} does not exist'
             }), 404
             
+        # Get ingestion strategy from session
+        ingestion_strategy = session.get('ingestion_strategy', 'type1')
+            
         # Get Spark session
         spark_manager = SparkManager.get_instance()
         spark = spark_manager.get_spark()
@@ -1192,7 +1351,7 @@ def preview_data():
             logger.info(f"Original columns found in file: {original_columns}")
             
             try:
-                processed_df = process_hospital_data(df)
+                processed_df = process_hospital_data(df, ingestion_strategy, spark)
                 processed_columns = processed_df.columns
                 logger.info(f"Processed columns: {processed_columns}")
                 
@@ -1210,9 +1369,13 @@ def preview_data():
                 
                 if not headers or not preview_data:
                     missing_columns = []
-                    required_columns = ['description', 'code', 'payer_name', 'plan_name', 
-                                     'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                                     'standard_charge_min', 'standard_charge_max']
+                    if ingestion_strategy == 'type2':
+                        required_columns = ['description', 'code', 'payer_name', 'plan_name', 
+                                         'standard_charge_gross', 'standard_charge_negotiated_dollar']
+                    else:
+                        required_columns = ['description', 'code', 'payer_name', 'plan_name', 
+                                         'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                                         'standard_charge_min', 'standard_charge_max']
                     
                     for col in required_columns:
                         if col not in headers:
@@ -1327,9 +1490,13 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.status = 'PROCESSING'
         task.message = 'Starting data processing...'
         
-        # Create required tables if they don't exist
-        create_hospital_charges_table()
-        create_hospital_charges_archive_table()
+        # Create required tables based on ingestion type
+        if ingestion_type == 'type2':
+            create_hospital_charges_type2_table()
+            create_hospital_charges_type2_archive_table()
+        else:
+            create_hospital_charges_table()
+            create_hospital_charges_archive_table()
         create_hospital_log_table()
         
         # Handle existing records - archive and mark inactive in a single transaction
@@ -1340,10 +1507,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             # Begin transaction
             cur.execute("BEGIN;")
             
-            # Get count of records to be archived
-            cur.execute("""
+            # Get count of records to be archived based on ingestion type
+            table_name = 'hospital_charges_type2' if ingestion_type == 'type2' else 'hospital_charges'
+            cur.execute(f"""
                 SELECT COUNT(*) 
-                FROM hospital_charges 
+                FROM {table_name}
                 WHERE hospital_name = %s AND is_active = TRUE;
             """, (hospital_name,))
             records_to_archive = cur.fetchone()[0]
@@ -1355,36 +1523,78 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 task.message = f'Found {records_to_archive:,} records to archive...'
                 
                 # Archive active records in a single transaction
-                archive_query = """
-                WITH records_to_archive AS (
-                    SELECT 
-                        hospital_name, description, code, code_type, payer_name, plan_name,
-                        standard_charge_gross, standard_charge_negotiated_dollar,
-                        standard_charge_min, standard_charge_max, created_at
-                    FROM hospital_charges 
-                    WHERE hospital_name = %s AND is_active = TRUE
-                ),
-                archived AS (
-                    INSERT INTO hospital_charges_archive (
-                        hospital_name, description, code, code_type, payer_name, plan_name,
-                        standard_charge_gross, standard_charge_negotiated_dollar,
-                        standard_charge_min, standard_charge_max, original_created_at,
-                        archive_reason, archived_at
+                if ingestion_type == 'type2':
+                    archive_query = """
+                    WITH records_to_archive AS (
+                        SELECT 
+                            hospital_name, description, code, code_type, modifiers, setting,
+                            drug_unit_of_measurement, drug_type_of_measurement,
+                            payer_name, plan_name, standard_charge_gross,
+                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
+                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
+                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            created_at
+                        FROM hospital_charges_type2 
+                        WHERE hospital_name = %s AND is_active = TRUE
+                    ),
+                    archived AS (
+                        INSERT INTO hospital_charges_type2_archive (
+                            hospital_name, description, code, code_type, modifiers, setting,
+                            drug_unit_of_measurement, drug_type_of_measurement,
+                            payer_name, plan_name, standard_charge_gross,
+                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
+                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
+                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            original_created_at, archive_reason
+                        )
+                        SELECT 
+                            hospital_name, description, code, code_type, modifiers, setting,
+                            drug_unit_of_measurement, drug_type_of_measurement,
+                            payer_name, plan_name, standard_charge_gross,
+                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
+                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
+                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            created_at, 'Replaced by new data upload'
+                        FROM records_to_archive
+                        RETURNING id
                     )
-                    SELECT 
-                        hospital_name, description, code, code_type, payer_name, plan_name,
-                        standard_charge_gross, standard_charge_negotiated_dollar,
-                        standard_charge_min, standard_charge_max, created_at,
-                        'Replaced by new data upload', CURRENT_TIMESTAMP
-                    FROM records_to_archive
-                    RETURNING id
-                )
-                UPDATE hospital_charges 
-                SET is_active = FALSE,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE hospital_name = %s AND is_active = TRUE
-                RETURNING id;
-                """
+                    UPDATE hospital_charges_type2 
+                    SET is_active = FALSE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE hospital_name = %s AND is_active = TRUE
+                    RETURNING id;
+                    """
+                else:
+                    archive_query = """
+                    WITH records_to_archive AS (
+                        SELECT 
+                            hospital_name, description, code, code_type, payer_name, plan_name,
+                            standard_charge_gross, standard_charge_negotiated_dollar,
+                            standard_charge_min, standard_charge_max, created_at
+                        FROM hospital_charges 
+                        WHERE hospital_name = %s AND is_active = TRUE
+                    ),
+                    archived AS (
+                        INSERT INTO hospital_charges_archive (
+                            hospital_name, description, code, code_type, payer_name, plan_name,
+                            standard_charge_gross, standard_charge_negotiated_dollar,
+                            standard_charge_min, standard_charge_max, original_created_at,
+                            archive_reason
+                        )
+                        SELECT 
+                            hospital_name, description, code, code_type, payer_name, plan_name,
+                            standard_charge_gross, standard_charge_negotiated_dollar,
+                            standard_charge_min, standard_charge_max, created_at,
+                            'Replaced by new data upload'
+                        FROM records_to_archive
+                        RETURNING id
+                    )
+                    UPDATE hospital_charges 
+                    SET is_active = FALSE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE hospital_name = %s AND is_active = TRUE
+                    RETURNING id;
+                    """
                 
                 # Execute archive and update in a single transaction
                 cur.execute(archive_query, (hospital_name, hospital_name))
@@ -1437,7 +1647,7 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             task.message = f'Found {total_records:,} total records in file...'
             
             task.message = 'Processing data...'
-            processed_df = process_hospital_data(df)
+            processed_df = process_hospital_data(df, ingestion_type, spark)
             
             # Add hospital name column and active flag
             processed_df = processed_df.withColumn('hospital_name', lit(hospital_name))
@@ -1450,7 +1660,10 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             
             # Remove duplicates based on key fields
             task.message = 'Removing duplicate records...'
-            dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
+            if ingestion_type == 'type2':
+                dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
+            else:
+                dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
             processed_df = processed_df.dropDuplicates(dedup_columns)
             
             unique_records = processed_df.count()
@@ -1492,10 +1705,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                             break
                         
                         # Write chunk to PostgreSQL
+                        table_name = 'hospital_charges_type2' if ingestion_type == 'type2' else 'hospital_charges'
                         chunk_df.write \
                             .format("jdbc") \
                             .option("url", jdbc_url) \
-                            .option("dbtable", "hospital_charges") \
+                            .option("dbtable", table_name) \
                             .option("user", connection_properties["user"]) \
                             .option("password", connection_properties["password"]) \
                             .option("driver", connection_properties["driver"]) \
@@ -1709,6 +1923,106 @@ def task_status(task_id):
             'success': False,
             'error': str(e)
         }), 500
+
+def create_hospital_charges_type2_table():
+    """Create the hospital_charges_type2 table for Type 2 ingestion"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS hospital_charges_type2 (
+            id SERIAL PRIMARY KEY,
+            hospital_name TEXT,
+            description TEXT,
+            code VARCHAR(50),
+            code_type VARCHAR(50),
+            modifiers VARCHAR(255),
+            setting VARCHAR(255),
+            drug_unit_of_measurement VARCHAR(50),
+            drug_type_of_measurement VARCHAR(50),
+            payer_name VARCHAR(255),
+            plan_name VARCHAR(255),
+            standard_charge_gross NUMERIC,
+            standard_charge_discounted_cash NUMERIC,
+            standard_charge_negotiated_dollar NUMERIC,
+            standard_charge_negotiated_percentage NUMERIC,
+            standard_charge_negotiated_algorithm TEXT,
+            standard_charge_methodology TEXT,
+            estimated_amount NUMERIC,
+            additional_payer_notes TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        
+        cur.execute(create_table_query)
+        conn.commit()
+        
+        logger.info("Successfully created hospital_charges_type2 table")
+        
+    except Exception as e:
+        logger.error(f"Error creating hospital_charges_type2 table: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
+
+def create_hospital_charges_type2_archive_table():
+    """Create the hospital_charges_type2_archive table for Type 2 ingestion"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS hospital_charges_type2_archive (
+            id SERIAL PRIMARY KEY,
+            hospital_name TEXT,
+            description TEXT,
+            code VARCHAR(50),
+            code_type VARCHAR(50),
+            modifiers VARCHAR(255),
+            setting VARCHAR(255),
+            drug_unit_of_measurement VARCHAR(50),
+            drug_type_of_measurement VARCHAR(50),
+            payer_name VARCHAR(255),
+            plan_name VARCHAR(255),
+            standard_charge_gross NUMERIC,
+            standard_charge_discounted_cash NUMERIC,
+            standard_charge_negotiated_dollar NUMERIC,
+            standard_charge_negotiated_percentage NUMERIC,
+            standard_charge_negotiated_algorithm TEXT,
+            standard_charge_methodology TEXT,
+            estimated_amount NUMERIC,
+            additional_payer_notes TEXT,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            original_created_at TIMESTAMP,
+            archive_reason TEXT
+        );
+        """
+        
+        cur.execute(create_table_query)
+        conn.commit()
+        
+        logger.info("Successfully created hospital_charges_type2_archive table")
+        
+    except Exception as e:
+        logger.error(f"Error creating hospital_charges_type2_archive table: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
 
 if __name__ == '__main__':
     app.run(debug=True)
