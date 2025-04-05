@@ -18,6 +18,9 @@ import queue
 import time
 from datetime import datetime, timedelta
 from pyspark.sql.functions import lit
+from io import StringIO
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -209,102 +212,76 @@ def create_hospital_address_table():
             return_db_connection(conn)
 
 def create_hospital_charges_table():
-    """Create the hospital_charges table if it doesn't exist"""
-    conn = None
-    cur = None
+    """Create the hospital_charges table with standardized schema"""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
         
-        create_table_query = """
+        # Create the main charges table
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS hospital_charges (
             id SERIAL PRIMARY KEY,
             hospital_name TEXT,
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
-            modifiers VARCHAR(255),
-            setting VARCHAR(255),
-            drug_unit_of_measurement VARCHAR(50),
-            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
             standard_charge_gross NUMERIC,
-            standard_charge_discounted_cash NUMERIC,
             standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_negotiated_percentage NUMERIC,
-            standard_charge_negotiated_algorithm TEXT,
-            standard_charge_methodology TEXT,
-            estimated_amount NUMERIC,
-            additional_payer_notes TEXT,
+            standard_charge_min NUMERIC,
+            standard_charge_max NUMERIC,
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """
+        """)
         
-        cur.execute(create_table_query)
         conn.commit()
-        
-        logger.info("Successfully ensured hospital_charges table exists with correct schema")
+        logger.info("Successfully created hospital_charges table")
         
     except Exception as e:
+        conn.rollback()
         logger.error(f"Error creating hospital_charges table: {str(e)}")
-        logger.error(traceback.format_exc())
         raise
     finally:
-        if cur:
-            cur.close()
         if conn:
             return_db_connection(conn)
 
 def create_hospital_charges_archive_table():
-    """Create the hospital_charges_archive table if it doesn't exist"""
-    conn = None
-    cur = None
+    """Create the hospital_charges_archive table with standardized schema"""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
         
-        create_table_query = """
+        # Create the archive table
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS hospital_charges_archive (
             id SERIAL PRIMARY KEY,
             hospital_name TEXT,
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
-            modifiers VARCHAR(255),
-            setting VARCHAR(255),
-            drug_unit_of_measurement VARCHAR(50),
-            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
             standard_charge_gross NUMERIC,
-            standard_charge_discounted_cash NUMERIC,
             standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_negotiated_percentage NUMERIC,
-            standard_charge_negotiated_algorithm TEXT,
-            standard_charge_methodology TEXT,
-            estimated_amount NUMERIC,
-            additional_payer_notes TEXT,
-            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            standard_charge_min NUMERIC,
+            standard_charge_max NUMERIC,
             original_created_at TIMESTAMP,
-            archive_reason TEXT
+            archive_reason TEXT,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """
+        """)
         
-        cur.execute(create_table_query)
         conn.commit()
-        
         logger.info("Successfully created hospital_charges_archive table")
         
     except Exception as e:
+        conn.rollback()
         logger.error(f"Error creating hospital_charges_archive table: {str(e)}")
-        logger.error(traceback.format_exc())
         raise
     finally:
-        if cur:
-            cur.close()
         if conn:
             return_db_connection(conn)
 
@@ -1462,83 +1439,58 @@ def load_address_data_route():
             'error': str(e)
         }), 500
 
-def process_chunks(processed_df, chunk_size=1000):
-    """Process hospital charges in chunks using pure PySpark"""
-    try:
-        # Get total count
-        total_rows = processed_df.count()
-        logger.info(f"Total rows to process: {total_rows}")
+def process_chunks(df, chunk_size=50000):
+    """Process DataFrame in chunks and insert into database using PySpark JDBC"""
+    total_rows = df.count()
+    num_chunks = (total_rows + chunk_size - 1) // chunk_size
+    
+    # Calculate number of partitions based on data size and chunk size
+    num_partitions = min(num_chunks, 200)  # Cap at 200 partitions to avoid over-partitioning
+    
+    # Repartition the DataFrame for better distribution
+    df = df.repartition(num_partitions)
+    
+    # Add row numbers with proper partitioning
+    window_spec = Window.partitionBy(spark_partition_id()).orderBy(monotonically_increasing_id())
+    
+    # Add partition ID and row number
+    df_with_row_num = df.withColumn("partition_id", spark_partition_id()) \
+                        .withColumn("row_num", row_number().over(window_spec))
+    
+    # JDBC connection properties
+    jdbc_url = f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
+    connection_properties = {
+        "user": DB_CONFIG['user'],
+        "password": DB_CONFIG['password'],
+        "driver": "org.postgresql.Driver",
+        "batchsize": "10000"  # Adjust batch size for optimal performance
+    }
+    
+    for i in range(num_chunks):
+        start_idx = i * chunk_size + 1  # 1-based row numbers
+        end_idx = min((i + 1) * chunk_size, total_rows)
         
-        # Initialize progress
-        processed_count = 0
-        
-        # Calculate number of partitions based on chunk size
-        num_partitions = (total_rows + chunk_size - 1) // chunk_size
-        
-        # Repartition the DataFrame for better distribution
-        partitioned_df = processed_df.repartition(num_partitions)
-        
-        # Add row numbers for chunking
-        from pyspark.sql.window import Window
-        from pyspark.sql.functions import row_number, spark_partition_id, col
-        
-        windowSpec = Window.partitionBy(spark_partition_id()).orderBy("description")
-        df_with_row_num = partitioned_df.withColumn("partition_id", spark_partition_id()) \
-                                      .withColumn("row_num", row_number().over(windowSpec))
-        
-        # Process each chunk
-        for chunk_num in range(num_partitions):
-            try:
-                start_idx = chunk_num * chunk_size
-                end_idx = start_idx + chunk_size
-                
-                # Get current chunk
-                chunk_df = df_with_row_num.filter(
-                    (col("partition_id") == chunk_num) & 
-                    (col("row_num") <= chunk_size)
-                ).drop("row_num", "partition_id")
-                
-                logger.info(f"Processing chunk {chunk_num + 1}/{num_partitions}")
-                logger.info(f"Chunk schema: {chunk_df.schema}")
-                
-                # Insert chunk into database using JDBC
-                insert_hospital_charges(chunk_df)
-                
-                processed_count += chunk_df.count()
-                logger.info(f"Processed {min(processed_count, total_rows)} out of {total_rows} rows")
-                
-            except Exception as chunk_error:
-                logger.error(f"Error processing chunk {chunk_num}: {str(chunk_error)}")
-                logger.error(f"Chunk error traceback: {traceback.format_exc()}")
-                raise
-        
-        logger.info("Completed processing all hospital charges")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Chunk processing error: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-
-def insert_hospital_charges(chunk_df):
-    """Insert a chunk of hospital charges into the database using JDBC"""
-    try:
-        # Write DataFrame to PostgreSQL using JDBC
-        chunk_df.write \
-            .format("jdbc") \
-            .option("url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
-            .option("driver", "org.postgresql.Driver") \
-            .option("dbtable", "hospital_charges") \
-            .option("user", DB_CONFIG['user']) \
-            .option("password", DB_CONFIG['password']) \
-            .option("batchsize", "10000") \
-            .mode("append") \
-            .save()
+        try:
+            # Get chunk of data using row numbers and partition ID
+            chunk = df_with_row_num.filter(
+                (df_with_row_num.row_num >= start_idx) & 
+                (df_with_row_num.row_num <= end_idx)
+            ).drop("row_num", "partition_id")
             
-    except Exception as e:
-        logger.error(f"Error inserting hospital charges: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
+            # Write chunk directly to database using JDBC
+            chunk.write \
+                .mode("append") \
+                .jdbc(
+                    url=jdbc_url,
+                    table="hospital_charges",
+                    properties=connection_properties
+                )
+            
+            logger.info(f"Successfully inserted chunk {i+1}/{num_chunks} ({end_idx-start_idx+1} records)")
+            
+        except Exception as e:
+            logger.error(f"Error inserting chunk {i+1}: {str(e)}")
+            raise
 
 def process_hospital_charges(data_file, hospital_name, task_id, user_name='system', ingestion_type='unknown', chunk_size=50000):
     """Process and load hospital charges data"""
@@ -1561,139 +1513,120 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.status = 'PROCESSING'
         task.message = 'Starting data processing...'
         
-        # Create required tables based on ingestion type
-        if ingestion_type == 'type2':
-            create_hospital_charges_type2_table()
-            create_hospital_charges_type2_archive_table()
-        else:
-            create_hospital_charges_table()
-            create_hospital_charges_archive_table()
+        # Create required tables (same tables for both Type 1 and Type 2)
+        create_hospital_charges_table()
+        create_hospital_charges_archive_table()
         create_hospital_log_table()
         
-        # Handle existing records - archive and mark inactive in a single transaction
+        # Check for existing hospital data and handle archival
         conn = get_db_connection()
+        archived_count = 0
+        
         try:
             cur = conn.cursor()
             
             # Begin transaction
             cur.execute("BEGIN;")
             
-            # Get count of records to be archived based on ingestion type
-            table_name = 'hospital_charges_type2' if ingestion_type == 'type2' else 'hospital_charges'
-            cur.execute(f"""
+            # First verify hospital exists in address table
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 
+                    FROM hospital_address 
+                    WHERE hospital_name = %s
+                );
+            """, (hospital_name,))
+            
+            if not cur.fetchone()[0]:
+                raise ValueError(f"Hospital '{hospital_name}' not found in address table. Please load hospital address data first.")
+            
+            # Check for existing active records
+            cur.execute("""
                 SELECT COUNT(*) 
-                FROM {table_name}
+                FROM hospital_charges
                 WHERE hospital_name = %s AND is_active = TRUE;
             """, (hospital_name,))
-            records_to_archive = cur.fetchone()[0]
             
-            # Initialize archived_count
-            archived_count = 0
+            existing_records = cur.fetchone()[0]
             
-            if records_to_archive > 0:
-                task.message = f'Found {records_to_archive:,} records to archive...'
+            if existing_records > 0:
+                task.message = f'Found {existing_records:,} existing active records for {hospital_name}...'
+                logger.info(f"Found {existing_records} existing active records for hospital: {hospital_name}")
                 
-                # Archive active records in a single transaction
-                if ingestion_type == 'type2':
-                    archive_query = """
-                    WITH records_to_archive AS (
-                        SELECT 
-                            hospital_name, description, code, code_type, modifiers, setting,
-                            drug_unit_of_measurement, drug_type_of_measurement,
-                            payer_name, plan_name, standard_charge_gross,
-                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
-                            standard_charge_negotiated_algorithm, standard_charge_methodology,
-                            estimated_amount, additional_payer_notes,
-                            created_at
-                        FROM hospital_charges_type2 
-                        WHERE hospital_name = %s AND is_active = TRUE
-                    ),
-                    archived AS (
-                        INSERT INTO hospital_charges_type2_archive (
-                            hospital_name, description, code, code_type, modifiers, setting,
-                            drug_unit_of_measurement, drug_type_of_measurement,
-                            payer_name, plan_name, standard_charge_gross,
-                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
-                            standard_charge_negotiated_algorithm, standard_charge_methodology,
-                            estimated_amount, additional_payer_notes,
-                            original_created_at, archive_reason
-                        )
-                        SELECT 
-                            hospital_name, description, code, code_type, modifiers, setting,
-                            drug_unit_of_measurement, drug_type_of_measurement,
-                            payer_name, plan_name, standard_charge_gross,
-                            standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
-                            standard_charge_negotiated_algorithm, standard_charge_methodology,
-                            estimated_amount, additional_payer_notes,
-                            created_at, 'Replaced by new data upload'
-                        FROM records_to_archive
-                        RETURNING id
-                    )
-                    UPDATE hospital_charges_type2 
-                    SET is_active = FALSE,
-                        updated_at = CURRENT_TIMESTAMP
+                # Archive existing records
+                archive_query = """
+                WITH records_to_archive AS (
+                    SELECT 
+                        hospital_name, description, code, code_type,
+                        payer_name, plan_name,
+                        standard_charge_gross,
+                        standard_charge_negotiated_dollar,
+                        standard_charge_min,
+                        standard_charge_max,
+                        created_at
+                    FROM hospital_charges 
                     WHERE hospital_name = %s AND is_active = TRUE
-                    RETURNING id;
-                    """
-                else:
-                    archive_query = """
-                    WITH records_to_archive AS (
-                        SELECT 
-                            hospital_name, description, code, code_type, payer_name, plan_name,
-                            standard_charge_gross, standard_charge_negotiated_dollar,
-                            standard_charge_min, standard_charge_max, created_at
-                        FROM hospital_charges 
-                        WHERE hospital_name = %s AND is_active = TRUE
-                    ),
-                    archived AS (
-                        INSERT INTO hospital_charges_archive (
-                            hospital_name, description, code, code_type, payer_name, plan_name,
-                            standard_charge_gross, standard_charge_negotiated_dollar,
-                            standard_charge_min, standard_charge_max, original_created_at,
-                            archive_reason
-                        )
-                        SELECT 
-                            hospital_name, description, code, code_type, payer_name, plan_name,
-                            standard_charge_gross, standard_charge_negotiated_dollar,
-                            standard_charge_min, standard_charge_max, created_at,
-                            'Replaced by new data upload'
-                        FROM records_to_archive
-                        RETURNING id
+                ),
+                archive_insert AS (
+                    INSERT INTO hospital_charges_archive (
+                        hospital_name, description, code, code_type,
+                        payer_name, plan_name,
+                        standard_charge_gross,
+                        standard_charge_negotiated_dollar,
+                        standard_charge_min,
+                        standard_charge_max,
+                        original_created_at,
+                        archive_reason
                     )
+                    SELECT 
+                        hospital_name, description, code, code_type,
+                        payer_name, plan_name,
+                        standard_charge_gross,
+                        standard_charge_negotiated_dollar,
+                        standard_charge_min,
+                        standard_charge_max,
+                        created_at,
+                        'Replaced by new data upload'
+                    FROM records_to_archive
+                ),
+                deactivate_records AS (
                     UPDATE hospital_charges 
-                    SET is_active = FALSE,
+                    SET 
+                        is_active = FALSE,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE hospital_name = %s AND is_active = TRUE
-                    RETURNING id;
-                    """
+                    RETURNING 1
+                )
+                SELECT COUNT(*) FROM deactivate_records;
+                """
                 
-                # Execute archive and update in a single transaction
+                # Execute archive query
                 cur.execute(archive_query, (hospital_name, hospital_name))
+                archived_count = cur.fetchone()[0]
                 
-                # Get the number of records that were actually archived (marked as inactive)
-                archived_count = cur.rowcount
+                task.message = f'Successfully archived {archived_count:,} records for {hospital_name}...'
+                logger.info(f"Successfully archived {archived_count} records for hospital: {hospital_name}")
+                
+                # Update log data
                 log_data['archived_records'] = archived_count
-                
-                task.message = f'Archived {archived_count:,} records...'
-                logger.info(f"Archived {archived_count:,} records for hospital: {hospital_name}")
             else:
-                task.message = 'No existing records to archive...'
-                logger.info(f"No existing records to archive for hospital: {hospital_name}")
+                task.message = f'No existing active records found for {hospital_name}, proceeding with new data ingestion...'
+                logger.info(f"No existing active records found for hospital: {hospital_name}")
             
             # Commit transaction
             conn.commit()
             
         except Exception as e:
             conn.rollback()
+            logger.error(f"Error during hospital data check/archival: {str(e)}")
+            logger.error(traceback.format_exc())
             raise
         finally:
             if cur:
                 cur.close()
-            return_db_connection(conn)
-        
+            if conn:
+                return_db_connection(conn)
+
         # Create Spark session with memory configuration and JDBC driver
         spark = SparkSession.builder \
             .appName("Healthcare Data Processing") \
@@ -1726,18 +1659,15 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             # Add hospital name column and active flag
             processed_df = processed_df.withColumn('hospital_name', lit(hospital_name))
             
-            # Add timestamp columns and active flag
+            # Add timestamp columns and active flag with proper datetime format
             current_time = datetime.now()
             processed_df = processed_df.withColumn('is_active', lit(True)) \
-                .withColumn('created_at', lit(current_time).cast('timestamp')) \
-                .withColumn('updated_at', lit(current_time).cast('timestamp'))
+                .withColumn('created_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp')) \
+                .withColumn('updated_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp'))
             
             # Remove duplicates based on key fields
             task.message = 'Removing duplicate records...'
-            if ingestion_type == 'type2':
-                dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
-            else:
-                dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
+            dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
             processed_df = processed_df.dropDuplicates(dedup_columns)
             
             unique_records = processed_df.count()
@@ -1889,10 +1819,6 @@ def load_charges():
                 cur.close()
             if conn:
                 return_db_connection(conn)
-        
-        # Create required tables
-        create_hospital_charges_table()
-        create_hospital_log_table()
         
         # Create new task
         task_id = f"task_{int(time.time())}"
