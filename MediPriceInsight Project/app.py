@@ -665,139 +665,132 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             if spark is None:
                 raise ValueError("Spark session is required for Type 2 ingestion")
                 
-            # Find the base columns that we want to keep as-is (columns without '|')
-            base_columns = [col for col in df.columns if not '|' in col]
+            # Log original columns for debugging
+            logger.info(f"Original columns in DataFrame: {df.columns}")
             
-            # Remove unwanted columns for Type 2 ingestion
-            columns_to_remove = [
-                'modifiers', 'setting', 'drug_unit_of_measurement', 
-                'drug_type_of_measurement', 'additional_generic_notes'
-            ]
-            base_columns = [col for col in base_columns if col not in columns_to_remove]
+            # Find all standard charge columns
+            standard_charge_columns = {
+                'gross': None,
+                'min': None,
+                'max': None
+            }
             
-            # Find all type columns (columns ending with |TYPE)
-            type_columns = [col for col in df.columns if col.upper().endswith('|TYPE')]
-            selected_type_col = None
+            # Find the exact column names for standard charges (case-insensitive)
+            for col in df.columns:
+                col_lower = col.lower()
+                if 'standard_charge' in col_lower:
+                    if 'gross' in col_lower:
+                        standard_charge_columns['gross'] = col
+                    elif 'min' in col_lower:
+                        standard_charge_columns['min'] = col
+                    elif 'max' in col_lower:
+                        standard_charge_columns['max'] = col
+            
+            logger.info(f"Found standard charge columns: {standard_charge_columns}")
+            
+            # Find code and code type columns
+            code_columns = [col for col in df.columns if 'code' in col.lower() and not col.lower().endswith('type')]
+            code_type_columns = [col for col in df.columns if col.lower().endswith('type')]
+            
+            logger.info(f"Found code columns: {code_columns}")
+            logger.info(f"Found code type columns: {code_type_columns}")
+            
+            # Find the code column with CPT type
             selected_code_col = None
+            selected_type_col = None
             
-            # Find the type column that has CPT value
-            for type_col in type_columns:
-                # Check if this column has 'CPT' value
+            for type_col in code_type_columns:
                 cpt_count = df.filter(df[type_col].rlike('(?i)CPT')).count()
                 if cpt_count > 0:
                     selected_type_col = type_col
-                    # Get the corresponding code column by removing |TYPE
-                    code_col = type_col.rsplit('|', 1)[0]  # This will convert CODE|1|TYPE to CODE|1
-                    if code_col in df.columns:
-                        selected_code_col = code_col
+                    # Find corresponding code column
+                    base_name = type_col.rsplit('|', 1)[0] if '|' in type_col else type_col.replace('type', '').strip()
+                    matching_code_cols = [col for col in code_columns if base_name in col]
+                    if matching_code_cols:
+                        selected_code_col = matching_code_cols[0]
                         break
             
-            if not selected_type_col or not selected_code_col:
+            if not selected_code_col or not selected_type_col:
                 error_msg = "No code column with CPT type found"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            # Add only the selected code and type columns to base columns
-            base_columns.append(selected_code_col)
-            base_columns.append(selected_type_col)
-            
-            # Add standard charge columns
-            if 'standard_charge|gross' in df.columns:
-                base_columns.append('standard_charge|gross')
-            if 'standard_charge|min' in df.columns:
-                base_columns.append('standard_charge|min')
-            if 'standard_charge|max' in df.columns:
-                base_columns.append('standard_charge|max')
-            
-            # Remove duplicate columns
-            base_columns = list(dict.fromkeys(base_columns))
-            
-            logger.info(f"Base columns: {base_columns}")
             logger.info(f"Selected code column: {selected_code_col}")
             logger.info(f"Selected type column: {selected_type_col}")
             
-            # Group columns by payer and plan
-            payer_groups = {}
+            # Create the base query for each payer/plan combination
+            base_query = f"""
+                SELECT 
+                    description,
+                    `{selected_code_col}` as code,
+                    `{selected_type_col}` as code_type
+            """
+            
+            # Add standard charge columns to base query
+            if standard_charge_columns['gross']:
+                base_query += f",\n    `{standard_charge_columns['gross']}` as standard_charge_gross"
+            else:
+                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_gross"
+                
+            if standard_charge_columns['min']:
+                base_query += f",\n    `{standard_charge_columns['min']}` as standard_charge_min"
+            else:
+                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_min"
+                
+            if standard_charge_columns['max']:
+                base_query += f",\n    `{standard_charge_columns['max']}` as standard_charge_max"
+            else:
+                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_max"
+            
+            # Find all payer/plan combinations with negotiated_dollar
+            payer_plan_columns = []
             for col in df.columns:
-                if col not in base_columns and '|' in col:
+                if 'standard_charge' in col.lower() and 'negotiated_dollar' in col.lower():
                     parts = col.split('|')
-                    if len(parts) >= 4 and parts[0].lower() == 'standard_charge':
-                        payer = parts[1]
-                        plan = parts[2]
-                        charge_type = parts[3].lower()
-                        
-                        # Skip the columns we want to ignore
-                        if charge_type in ['negotiated_percentage', 'negotiated_algorithm', 'methodology', 'discounted_cash']:
-                            continue
-                        
-                        key = f"{payer}|{plan}"
-                        if key not in payer_groups:
-                            payer_groups[key] = {
-                                'payer': payer,
-                                'plan': plan,
-                                'columns': {}
-                            }
-                        
-                        payer_groups[key]['columns'][charge_type] = col
+                    if len(parts) >= 4:
+                        payer_plan_columns.append({
+                            'column': col,
+                            'payer': parts[1],
+                            'plan': parts[2]
+                        })
             
-            logger.info(f"Found payer groups: {payer_groups}")
+            logger.info(f"Found payer/plan columns: {payer_plan_columns}")
             
-            # Create the unpivot expression
-            unpivot_expr = []
-            for key, group in payer_groups.items():
-                # Only process if negotiated_dollar exists
-                if 'negotiated_dollar' in group['columns']:
-                    # Escape column names for SQL
-                    escaped_base_cols = [f"`{col}`" for col in base_columns]
-                    
-                    select_cols = [
-                        *escaped_base_cols,
-                        f"'{group['payer']}' as payer_name",
-                        f"'{group['plan']}' as plan_name",
-                        f"`{group['columns']['negotiated_dollar']}` as standard_charge_negotiated_dollar"
-                    ]
-                    
-                    # Add optional columns if they exist (excluding the ignored ones)
-                    optional_cols = {
-                        'estimated_amount': 'estimated_amount',
-                        'additional_payer_notes': 'additional_payer_notes'
-                    }
-                    
-                    for src, dest in optional_cols.items():
-                        if src in group['columns']:
-                            select_cols.append(f"`{group['columns'][src]}` as {dest}")
-                    
-                    # Add to unpivot expression
-                    unpivot_expr.append(f"""
-                        SELECT 
-                            {', '.join(select_cols)}
-                        FROM __this__
-                        WHERE `{group['columns']['negotiated_dollar']}` IS NOT NULL
-                    """)
+            # Create union queries for each payer/plan combination
+            union_queries = []
+            for pp in payer_plan_columns:
+                query = f"""
+                    {base_query},
+                    '{pp['payer']}' as payer_name,
+                    '{pp['plan']}' as plan_name,
+                    `{pp['column']}` as standard_charge_negotiated_dollar
+                FROM __this__
+                WHERE `{pp['column']}` IS NOT NULL
+                """
+                union_queries.append(query)
             
-            if not unpivot_expr:
-                logger.warning("No valid payer/plan/negotiated charge combinations found")
-                # Return the base data without unpivoting
-                return df.select(base_columns)
+            if not union_queries:
+                error_msg = "No valid payer/plan combinations found with negotiated dollar amounts"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
             
-            # Combine all unpivot expressions
-            combined_sql = " UNION ALL ".join(unpivot_expr)
+            # Combine all queries
+            final_query = " UNION ALL ".join(union_queries)
+            logger.info(f"Generated final SQL query: {final_query}")
             
-            logger.info(f"Generated SQL query: {combined_sql}")
-            
-            # Apply the transformation
+            # Create temp view and execute query
             df.createOrReplaceTempView("__this__")
-            df_final = spark.sql(combined_sql)
+            df_final = spark.sql(final_query)
             
-            # Convert numeric columns
+            # Cast numeric columns to correct type
             numeric_columns = [
-                'standard_charge_gross', 'standard_charge_negotiated_dollar', 
-                'standard_charge_min', 'standard_charge_max', 'estimated_amount'
+                'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                'standard_charge_min', 'standard_charge_max'
             ]
             
             for col in numeric_columns:
                 if col in df_final.columns:
-                    df_final = df_final.withColumn(col, df_final[col].cast('double'))
+                    df_final = df_final.withColumn(col, df_final[col].cast('decimal(38,18)'))
             
             return df_final
             
@@ -877,7 +870,7 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             
             for col in numeric_columns:
                 if col in df_cpt.columns:
-                    df_cpt = df_cpt.withColumn(col, df_cpt[col].cast('double'))
+                    df_cpt = df_cpt.withColumn(col, df_cpt[col].cast('decimal(38,18)'))
             
             return df_cpt
             
@@ -1469,6 +1462,84 @@ def load_address_data_route():
             'error': str(e)
         }), 500
 
+def process_chunks(processed_df, chunk_size=1000):
+    """Process hospital charges in chunks using pure PySpark"""
+    try:
+        # Get total count
+        total_rows = processed_df.count()
+        logger.info(f"Total rows to process: {total_rows}")
+        
+        # Initialize progress
+        processed_count = 0
+        
+        # Calculate number of partitions based on chunk size
+        num_partitions = (total_rows + chunk_size - 1) // chunk_size
+        
+        # Repartition the DataFrame for better distribution
+        partitioned_df = processed_df.repartition(num_partitions)
+        
+        # Add row numbers for chunking
+        from pyspark.sql.window import Window
+        from pyspark.sql.functions import row_number, spark_partition_id, col
+        
+        windowSpec = Window.partitionBy(spark_partition_id()).orderBy("description")
+        df_with_row_num = partitioned_df.withColumn("partition_id", spark_partition_id()) \
+                                      .withColumn("row_num", row_number().over(windowSpec))
+        
+        # Process each chunk
+        for chunk_num in range(num_partitions):
+            try:
+                start_idx = chunk_num * chunk_size
+                end_idx = start_idx + chunk_size
+                
+                # Get current chunk
+                chunk_df = df_with_row_num.filter(
+                    (col("partition_id") == chunk_num) & 
+                    (col("row_num") <= chunk_size)
+                ).drop("row_num", "partition_id")
+                
+                logger.info(f"Processing chunk {chunk_num + 1}/{num_partitions}")
+                logger.info(f"Chunk schema: {chunk_df.schema}")
+                
+                # Insert chunk into database using JDBC
+                insert_hospital_charges(chunk_df)
+                
+                processed_count += chunk_df.count()
+                logger.info(f"Processed {min(processed_count, total_rows)} out of {total_rows} rows")
+                
+            except Exception as chunk_error:
+                logger.error(f"Error processing chunk {chunk_num}: {str(chunk_error)}")
+                logger.error(f"Chunk error traceback: {traceback.format_exc()}")
+                raise
+        
+        logger.info("Completed processing all hospital charges")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Chunk processing error: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+def insert_hospital_charges(chunk_df):
+    """Insert a chunk of hospital charges into the database using JDBC"""
+    try:
+        # Write DataFrame to PostgreSQL using JDBC
+        chunk_df.write \
+            .format("jdbc") \
+            .option("url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
+            .option("driver", "org.postgresql.Driver") \
+            .option("dbtable", "hospital_charges") \
+            .option("user", DB_CONFIG['user']) \
+            .option("password", DB_CONFIG['password']) \
+            .option("batchsize", "10000") \
+            .mode("append") \
+            .save()
+            
+    except Exception as e:
+        logger.error(f"Error inserting hospital charges: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
 def process_hospital_charges(data_file, hospital_name, task_id, user_name='system', ingestion_type='unknown', chunk_size=50000):
     """Process and load hospital charges data"""
     start_time = datetime.now()
@@ -1531,8 +1602,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                             drug_unit_of_measurement, drug_type_of_measurement,
                             payer_name, plan_name, standard_charge_gross,
                             standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
-                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
+                            standard_charge_negotiated_algorithm, standard_charge_methodology,
+                            estimated_amount, additional_payer_notes,
                             created_at
                         FROM hospital_charges_type2 
                         WHERE hospital_name = %s AND is_active = TRUE
@@ -1543,8 +1615,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                             drug_unit_of_measurement, drug_type_of_measurement,
                             payer_name, plan_name, standard_charge_gross,
                             standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
-                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
+                            standard_charge_negotiated_algorithm, standard_charge_methodology,
+                            estimated_amount, additional_payer_notes,
                             original_created_at, archive_reason
                         )
                         SELECT 
@@ -1552,8 +1625,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                             drug_unit_of_measurement, drug_type_of_measurement,
                             payer_name, plan_name, standard_charge_gross,
                             standard_charge_discounted_cash, standard_charge_negotiated_dollar,
-                            standard_charge_negotiated_percentage, standard_charge_negotiated_algorithm,
-                            standard_charge_methodology, estimated_amount, additional_payer_notes,
+                            standard_charge_negotiated_percentage, standard_charge_min, standard_charge_max,
+                            standard_charge_negotiated_algorithm, standard_charge_methodology,
+                            estimated_amount, additional_payer_notes,
                             created_at, 'Replaced by new data upload'
                         FROM records_to_archive
                         RETURNING id
@@ -1670,83 +1744,8 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             log_data['unique_records'] = unique_records
             task.message = f'Found {unique_records:,} unique records to process...'
             
-            # Calculate chunks
-            num_partitions = (unique_records + chunk_size - 1) // chunk_size
-            processed_df = processed_df.repartition(num_partitions)
-            
-            # JDBC connection properties
-            jdbc_url = f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-            connection_properties = {
-                "user": DB_CONFIG['user'],
-                "password": DB_CONFIG['password'],
-                "driver": "org.postgresql.Driver",
-                "batchsize": "10000",
-                "numPartitions": str(num_partitions)
-            }
-            
-            # Process and write data in chunks
-            rows_processed = 0
-            processing_start_time = time.time()
-            last_progress_update = time.time()
-            progress_update_interval = 1.0
-            
-            for i in range(num_partitions):
-                chunk_start_time = time.time()
-                retry_count = 0
-                max_retries = 3
-                
-                while retry_count < max_retries:
-                    try:
-                        # Get chunk of data
-                        chunk_df = processed_df.limit(chunk_size)
-                        chunk_size_actual = chunk_df.count()
-                        
-                        if chunk_size_actual == 0:
-                            break
-                        
-                        # Write chunk to PostgreSQL
-                        table_name = 'hospital_charges_type2' if ingestion_type == 'type2' else 'hospital_charges'
-                        chunk_df.write \
-                            .format("jdbc") \
-                            .option("url", jdbc_url) \
-                            .option("dbtable", table_name) \
-                            .option("user", connection_properties["user"]) \
-                            .option("password", connection_properties["password"]) \
-                            .option("driver", connection_properties["driver"]) \
-                            .option("batchsize", connection_properties["batchsize"]) \
-                            .option("numPartitions", connection_properties["numPartitions"]) \
-                            .option("truncate", "false") \
-                            .mode("append") \
-                            .save()
-                        
-                        rows_processed += chunk_size_actual
-                        current_time = time.time()
-                        
-                        # Update progress if enough time has passed
-                        if current_time - last_progress_update >= progress_update_interval:
-                            progress = (rows_processed / unique_records) * 100 if unique_records > 0 else 0
-                            elapsed_time = current_time - processing_start_time
-                            elapsed_minutes = int(elapsed_time // 60)
-                            elapsed_seconds = int(elapsed_time % 60)
-                            elapsed_str = f"{elapsed_minutes}m {elapsed_seconds}s"
-                            
-                            task.progress = progress
-                            if rows_processed > 0:
-                                task.message = f'Processing... {rows_processed:,} records\nElapsed time: {elapsed_str}'
-                            
-                            last_progress_update = current_time
-                        
-                        break  # Success, exit retry loop
-                        
-                    except Exception as chunk_error:
-                        retry_count += 1
-                        error_msg = str(chunk_error)
-                        logger.error(f"Error processing chunk {i + 1} (attempt {retry_count}): {error_msg}")
-                        
-                        if retry_count == max_retries:
-                            raise
-                        
-                        time.sleep(min(30, 2 ** retry_count))
+            # Process in chunks using the new function
+            process_chunks(processed_df, chunk_size)
             
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
@@ -1783,11 +1782,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             task.result = {
                 'total_records': total_records,
                 'unique_records': unique_records,
-                'processed_rows': rows_processed,
+                'processed_rows': unique_records,
                 'archived_rows': archived_count,
                 'message': f'Successfully processed {unique_records:,} records',
                 'elapsed_time': final_elapsed_str,
-                'average_speed': f"{rows_processed/processing_time:.0f} records/second"
+                'average_speed': f"{unique_records/processing_time:.0f} records/second"
             }
             
         finally:
@@ -1857,7 +1856,39 @@ def load_charges():
                 'details': 'Hospital address data is required'
             }), 400
         
-        hospital_name = address_data['hospital_name']
+        # Verify hospital exists in address table and get exact name
+        conn = None
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT hospital_name 
+                FROM hospital_address 
+                WHERE hospital_name = %s
+            """, (address_data['hospital_name'],))
+            
+            result = cur.fetchone()
+            if not result:
+                return jsonify({
+                    'success': False,
+                    'error': 'Hospital not found',
+                    'details': 'Please ensure hospital address is loaded first'
+                }), 400
+                
+            hospital_name = result[0]  # Use exact name from database
+            
+        except Exception as e:
+            logger.error(f"Database error: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': 'Database error',
+                'details': str(e)
+            }), 500
+        finally:
+            if cur:
+                cur.close()
+            if conn:
+                return_db_connection(conn)
         
         # Create required tables
         create_hospital_charges_table()
@@ -1871,7 +1902,7 @@ def load_charges():
         # Add task to queue
         task_queue.put({
             'data_file': data_file,
-            'hospital_name': hospital_name,
+            'hospital_name': hospital_name,  # Use exact name from database
             'task_id': task_id,
             'user_name': session.get('user_name', 'system'),
             'ingestion_type': session.get('ingestion_strategy', 'unknown'),
@@ -1932,27 +1963,22 @@ def create_hospital_charges_type2_table():
         conn = get_db_connection()
         cur = conn.cursor()
         
+        # Drop the table if it exists to ensure clean schema
+        cur.execute("DROP TABLE IF EXISTS hospital_charges_type2;")
+        
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS hospital_charges_type2 (
+        CREATE TABLE hospital_charges_type2 (
             id SERIAL PRIMARY KEY,
             hospital_name TEXT,
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
-            modifiers VARCHAR(255),
-            setting VARCHAR(255),
-            drug_unit_of_measurement VARCHAR(50),
-            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC,
-            standard_charge_discounted_cash NUMERIC,
-            standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_negotiated_percentage NUMERIC,
-            standard_charge_negotiated_algorithm TEXT,
-            standard_charge_methodology TEXT,
-            estimated_amount NUMERIC,
-            additional_payer_notes TEXT,
+            standard_charge_gross NUMERIC(38,18),
+            standard_charge_negotiated_dollar NUMERIC(38,18),
+            standard_charge_min NUMERIC(38,18),
+            standard_charge_max NUMERIC(38,18),
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1982,27 +2008,22 @@ def create_hospital_charges_type2_archive_table():
         conn = get_db_connection()
         cur = conn.cursor()
         
+        # Drop the table if it exists to ensure clean schema
+        cur.execute("DROP TABLE IF EXISTS hospital_charges_type2_archive;")
+        
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS hospital_charges_type2_archive (
+        CREATE TABLE hospital_charges_type2_archive (
             id SERIAL PRIMARY KEY,
             hospital_name TEXT,
             description TEXT,
             code VARCHAR(50),
             code_type VARCHAR(50),
-            modifiers VARCHAR(255),
-            setting VARCHAR(255),
-            drug_unit_of_measurement VARCHAR(50),
-            drug_type_of_measurement VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC,
-            standard_charge_discounted_cash NUMERIC,
-            standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_negotiated_percentage NUMERIC,
-            standard_charge_negotiated_algorithm TEXT,
-            standard_charge_methodology TEXT,
-            estimated_amount NUMERIC,
-            additional_payer_notes TEXT,
+            standard_charge_gross NUMERIC(38,18),
+            standard_charge_negotiated_dollar NUMERIC(38,18),
+            standard_charge_min NUMERIC(38,18),
+            standard_charge_max NUMERIC(38,18),
             archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             original_created_at TIMESTAMP,
             archive_reason TEXT
