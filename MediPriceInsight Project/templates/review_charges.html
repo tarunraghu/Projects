@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Hospital Charges</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #3b82f6;
+            --error-color: #ef4444;
+            --success-color: #10b981;
+            --step-active: #2563eb;
+            --step-completed: #3b82f6;
+            --step-pending: #e5e7eb;
+            --background-color: #f3f4f6;
+            --card-background: #ffffff;
+            --text-color: #1f2937;
+            --border-radius: 12px;
+            --box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--background-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: var(--card-background);
+            padding: 40px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .header h1 {
+            color: var(--primary-color);
+            margin-bottom: 16px;
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .header p {
+            color: #6b7280;
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .steps-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 40px 0;
+            padding: 30px;
+            background-color: #f9fafb;
+            border-radius: var(--border-radius);
+            position: relative;
+            gap: 160px;
+        }
+
+        .step {
+            flex: 0 0 auto;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+            width: 120px;
+        }
+
+        /* Line before the step */
+        .step::before {
+            content: '';
+            position: absolute;
+            top: 24px;
+            left: -192.3px;  /* Increased by 2% from -188.5px */
+            width: 308.4px;  /* Increased by 5% from 293.7px */
+            height: 1px;
+            background-color: var(--step-pending);
+            z-index: 0;
+        }
+
+        /* Hide line before first step */
+        .step:first-child::before {
+            display: none;
+        }
+
+        /* Hide line after last step */
+        .step:last-child::before {
+            display: none;
+        }
+
+        /* Active and completed step lines */
+        .step.active::before,
+        .step.completed::before {
+            background-color: var(--step-completed);
+        }
+
+        .step-number {
+            width: 50px;
+            height: 50px;
+            background-color: var(--step-pending);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-weight: 600;
+            font-size: 18px;
+            color: #6b7280;
+            position: relative;
+            z-index: 2;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 0 8px #f9fafb;
+        }
+
+        .step.active .step-number {
+            background-color: var(--step-active);
+            color: white;
+        }
+
+        .step.completed .step-number {
+            background-color: var(--step-completed);
+            color: white;
+        }
+
+        .step-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+            font-size: 16px;
+        }
+
+        .step-description {
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.4;
+        }
+
+        .preview-section {
+            margin: 40px 0;
+            padding: 30px;
+            background-color: #f9fafb;
+            border-radius: var(--border-radius);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .preview-section h2 {
+            color: var(--primary-color);
+            margin-bottom: 24px;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .preview-info {
+            margin-bottom: 20px;
+            padding: 16px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .preview-info p {
+            margin: 0;
+            color: #374151;
+            font-size: 14px;
+        }
+
+        .preview-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 20px;
+            background-color: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .table-container {
+            width: 100%;
+            overflow-x: auto;
+            margin-top: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .preview-table th,
+        .preview-table td {
+            padding: 16px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+            white-space: nowrap;
+        }
+
+        .preview-table th {
+            background-color: #f9fafb;
+            color: #374151;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .preview-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .preview-table tr:hover td {
+            background-color: #f3f4f6;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 40px;
+        }
+
+        .button {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .button-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .button-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-1px);
+        }
+
+        .button-secondary {
+            background-color: #6b7280;
+            color: white;
+        }
+
+        .button-secondary:hover {
+            background-color: #4b5563;
+            transform: translateY(-1px);
+        }
+
+        .button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .spinner {
+            display: none;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            color: var(--error-color);
+            margin: 16px 0;
+            padding: 16px;
+            background-color: #fef2f2;
+            border-radius: 8px;
+            border: 1px solid #fee2e2;
+            display: none;
+        }
+
+        .success-message {
+            color: var(--success-color);
+            margin: 16px 0;
+            padding: 16px;
+            background-color: #f0fdf4;
+            border-radius: 8px;
+            border: 1px solid #dcfce7;
+            display: none;
+        }
+
+        .message-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            .steps-container {
+                flex-direction: column;
+                gap: 20px;
+            }
+
+            .step:not(:last-child)::after {
+                display: none;
+            }
+
+            .preview-table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+            }
+
+            .button-container {
+                flex-direction: column;
+            }
+
+            .button {
+                width: 100%;
+            }
+        }
+
+        /* Progress indicator styles */
+        .progress-container {
+            display: none;
+            margin: 40px 0;
+            padding: 30px;
+            background-color: #f9fafb;
+            border-radius: var(--border-radius);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .progress-circle {
+            position: relative;
+            width: 150px;
+            height: 150px;
+            margin: 0 auto 20px;
+        }
+
+        .progress-circle svg {
+            transform: rotate(-90deg);
+        }
+
+        .progress-circle circle {
+            fill: none;
+            stroke-width: 8;
+        }
+
+        .progress-circle .background {
+            stroke: #e5e7eb;
+        }
+
+        .progress-circle .progress {
+            stroke: var(--primary-color);
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+
+        .progress-percentage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .progress-status {
+            margin-top: 20px;
+            font-size: 16px;
+            color: #374151;
+            font-weight: 500;
+        }
+
+        .progress-details {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .progress-time {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Review Hospital Charges</h1>
+            <p>Please review the hospital charges data before proceeding</p>
+        </div>
+
+        <!-- Steps -->
+        <div class="steps-container">
+            <div class="step completed">
+                <div class="step-number">1</div>
+                <div class="step-title">File Selection</div>
+                <div class="step-description">Select and upload CSV file</div>
+            </div>
+            <div class="step completed">
+                <div class="step-number">2</div>
+                <div class="step-title">Review Address</div>
+                <div class="step-description">Verify hospital address data</div>
+            </div>
+            <div class="step active">
+                <div class="step-number">3</div>
+                <div class="step-title">Review Charges</div>
+                <div class="step-description">Verify hospital charges data</div>
+            </div>
+        </div>
+
+        <!-- Preview Section -->
+        <div class="preview-section">
+            <h2>Hospital Charges Preview</h2>
+            <div class="preview-info">
+                <p>Total Rows in File: <span id="totalRows">0</span></p>
+            </div>
+            <div class="table-container">
+                <table class="preview-table">
+                    <thead>
+                        <tr id="headerRow">
+                            <!-- Headers will be populated dynamically -->
+                        </tr>
+                    </thead>
+                    <tbody id="previewBody">
+                        <!-- Preview data will be populated dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Progress Indicator -->
+        <div id="progressContainer" class="progress-container">
+            <div class="progress-circle">
+                <svg width="150" height="150">
+                    <circle class="background" cx="75" cy="75" r="70"></circle>
+                    <circle class="progress" cx="75" cy="75" r="70"
+                            stroke-dasharray="439.8" stroke-dashoffset="439.8"></circle>
+                </svg>
+                <div class="progress-percentage">0%</div>
+            </div>
+            <div class="progress-status">Preparing to process data...</div>
+            <div id="progressDetails" class="progress-details" style="display: none;">Processed: <span id="processedRows">0</span> of <span id="totalRows">0</span> rows</div>
+            <div class="progress-time">Elapsed time: <span id="elapsedTime">0 seconds</span></div>
+        </div>
+
+        <!-- Button Container -->
+        <div class="button-container">
+            <button class="button button-secondary" onclick="window.location.href='/review-address'">Back to Review Address</button>
+            <button id="loadButton" class="button button-primary" onclick="loadChargesData()">Load Data</button>
+        </div>
+
+        <!-- Message Container -->
+        <div class="message-container">
+            <div id="spinner" class="spinner"></div>
+            <div id="errorMessage" class="error-message"></div>
+            <div id="successMessage" class="success-message"></div>
+        </div>
+    </div>
+
+    <script>
+        function showSpinner() {
+            document.getElementById('spinner').style.display = 'block';
+        }
+
+        function hideSpinner() {
+            document.getElementById('spinner').style.display = 'none';
+        }
+
+        function showError(title, details = '') {
+            const errorDiv = document.getElementById('errorMessage');
+            if (title) {
+                const formattedDetails = details.split('\n').map(line => 
+                    line.trim() ? `<div class="error-detail-line">${line}</div>` : ''
+                ).join('');
+                
+                errorDiv.innerHTML = `
+                    <div class="error-title">${title}</div>
+                    ${formattedDetails ? `<div class="error-details">${formattedDetails}</div>` : ''}
+                `;
+                errorDiv.style.display = 'block';
+            } else {
+                errorDiv.style.display = 'none';
+            }
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            if (message) {
+                successDiv.textContent = message;
+                successDiv.style.display = 'block';
+            } else {
+                successDiv.style.display = 'none';
+            }
+        }
+
+        function formatCellValue(value) {
+            if (value === null || value === undefined || value === 'NaN' || value === 'null') {
+                return '';
+            }
+            if (typeof value === 'number' && (isNaN(value) || !isFinite(value))) {
+                return '';
+            }
+            return String(value);
+        }
+
+        function updatePreviewTable(headers, data) {
+            try {
+                if (!headers || !Array.isArray(headers) || headers.length === 0) {
+                    throw new Error('Invalid or empty headers received');
+                }
+                if (!data || !Array.isArray(data) || data.length === 0) {
+                    throw new Error('Invalid or empty data received');
+                }
+
+                console.log('Updating table with headers:', headers);
+                console.log('Updating table with data:', data);
+
+                // Update headers
+                const headerRow = document.getElementById('headerRow');
+                headerRow.innerHTML = headers.map(header => `<th>${header}</th>`).join('');
+
+                // Update data
+                const previewBody = document.getElementById('previewBody');
+                previewBody.innerHTML = data.map(row => `
+                    <tr>
+                        ${headers.map(header => {
+                            const value = row[header];
+                            console.log(`Value for ${header}:`, value);
+                            return `<td>${formatCellValue(value)}</td>`;
+                        }).join('')}
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error('Error updating preview table:', error);
+                showError('Error Displaying Data', 
+                    `Failed to update the preview table. Details:\n${error.message}\n\nPlease check the console for more information.`);
+            }
+        }
+
+        async function loadPreviewData() {
+            try {
+                showSpinner();
+                showError(null); // Clear any existing error
+                showSuccess(null); // Clear any existing success message
+                
+                const response = await fetch('/preview-data');
+                const responseText = await response.text();
+                
+                // Try to parse the response text, replacing NaN with null
+                const cleanedText = responseText.replace(/:\s*NaN/g, ': null');
+                const result = JSON.parse(cleanedText);
+                
+                console.log('Preview data response:', result);
+
+                if (result.success) {
+                    document.getElementById('totalRows').textContent = result.total_rows;
+                    if (!result.headers || result.headers.length === 0) {
+                        throw new Error('No columns found in the processed data');
+                    }
+                    if (!result.preview_data || result.preview_data.length === 0) {
+                        throw new Error('No preview data available');
+                    }
+                    
+                    console.log('Headers:', result.headers);
+                    console.log('Preview data:', result.preview_data);
+                    
+                    updatePreviewTable(result.headers, result.preview_data);
+                } else {
+                    const errorDetails = [
+                        result.error || 'Failed to load preview data',
+                        result.details || '',
+                        result.technical_details || '',
+                        `Total rows found: ${result.total_rows || 0}`,
+                        result.available_columns ? `Available columns: ${result.available_columns.join(', ')}` : '',
+                        result.missing_columns ? `Missing required columns: ${result.missing_columns.join(', ')}` : ''
+                    ].filter(Boolean).join('\n');
+
+                    showError('Data Loading Error', errorDetails);
+                }
+            } catch (error) {
+                console.error('Error details:', error);
+                let errorDetails = 'Technical details:\n';
+                errorDetails += `- Error name: ${error.name}\n`;
+                errorDetails += `- Error message: ${error.message}\n`;
+                
+                if (error.stack) {
+                    console.error('Stack trace:', error.stack);
+                    errorDetails += `- Stack trace available in console\n`;
+                }
+                
+                showError('Error Loading Preview Data', 
+                    'An error occurred while loading the preview data. Details below:\n\n' + errorDetails);
+            } finally {
+                hideSpinner();
+            }
+        }
+
+        function updateProgress(progress, status, current, total, elapsedTime) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressCircle = document.querySelector('.progress-circle .progress');
+            const progressPercentage = document.querySelector('.progress-percentage');
+            const progressStatus = document.querySelector('.progress-status');
+            const progressDetails = document.getElementById('progressDetails');
+            const processedRows = document.getElementById('processedRows');
+            const totalRowsSpan = document.getElementById('totalRows');
+            const elapsedTimeSpan = document.getElementById('elapsedTime');
+            
+            // Show progress container
+            progressContainer.style.display = 'block';
+            
+            // Update circle progress
+            const circumference = 2 * Math.PI * 70;
+            const offset = circumference - (progress / 100) * circumference;
+            progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+            progressCircle.style.strokeDashoffset = offset;
+            
+            // Update percentage text
+            progressPercentage.textContent = `${Math.round(progress)}%`;
+            
+            // Update status
+            progressStatus.textContent = status;
+            
+            // Only show progress details if we have actual data
+            if (current > 0 && total > 0) {
+                progressDetails.style.display = 'block';
+                processedRows.textContent = current.toLocaleString();
+                totalRowsSpan.textContent = total.toLocaleString();
+            } else {
+                progressDetails.style.display = 'none';
+            }
+            
+            // Format elapsed time
+            const seconds = Math.floor(elapsedTime);
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            elapsedTimeSpan.textContent = `${minutes}m ${remainingSeconds}s`;
+        }
+
+        function loadChargesData() {
+            const loadButton = document.getElementById('loadButton');
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+            
+            // Reset messages
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+            
+            // Disable button
+            loadButton.disabled = true;
+            loadButton.textContent = 'Processing...';
+            
+            // Start data loading
+            fetch('/load-charges', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    pollTaskStatus(data.task_id);
+                } else {
+                    throw new Error(data.error || 'Failed to start data processing');
+                }
+            })
+            .catch(error => {
+                errorMessage.textContent = error.message;
+                errorMessage.style.display = 'block';
+                loadButton.disabled = false;
+                loadButton.textContent = 'Load Data';
+            });
+        }
+
+        function pollTaskStatus(taskId) {
+            let startTime = Date.now();
+            const interval = setInterval(() => {
+                fetch(`/task-status/${taskId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'SUCCESS') {
+                            clearInterval(interval);
+                            document.getElementById('successMessage').textContent = data.result.message;
+                            document.getElementById('successMessage').style.display = 'block';
+                            document.getElementById('loadButton').textContent = 'Completed';
+                            
+                            // Calculate elapsed time
+                            const elapsedTime = (Date.now() - startTime) / 1000;
+                            updateProgress(100, 'Processing complete!', 
+                                data.result.total_rows, data.result.total_rows, 
+                                elapsedTime);
+                        } else if (data.status === 'FAILURE') {
+                            clearInterval(interval);
+                            document.getElementById('errorMessage').textContent = data.error;
+                            document.getElementById('errorMessage').style.display = 'block';
+                            document.getElementById('loadButton').disabled = false;
+                            document.getElementById('loadButton').textContent = 'Load Data';
+                        } else if (data.status === 'PROCESSING') {
+                            // Calculate elapsed time
+                            const elapsedTime = (Date.now() - startTime) / 1000;
+                            
+                            // Parse the status message to extract current and total records
+                            const match = data.message.match(/Processing records: (\d+) of (\d+)/);
+                            let currentRecords = 0;
+                            let totalRecords = 0;
+                            
+                            if (match) {
+                                currentRecords = parseInt(match[1].replace(/,/g, ''));
+                                totalRecords = parseInt(match[2].replace(/,/g, ''));
+                            } else {
+                                // Fallback to progress percentage if message parsing fails
+                                currentRecords = Math.floor((data.progress / 100) * data.total);
+                                totalRecords = data.total;
+                            }
+                            
+                            updateProgress(
+                                data.progress,
+                                data.message,
+                                currentRecords,
+                                totalRecords,
+                                elapsedTime
+                            );
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error polling task status:', error);
+                    });
+            }, 10000); // Poll every 10 seconds
+        }
+
+        // Load preview data when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            showError(null); // Clear any existing error
+            showSuccess(null); // Clear any existing success message
+            loadPreviewData();
+        });
+    </script>
+</body>
+</html> 
