@@ -17,10 +17,11 @@ import threading
 import queue
 import time
 from datetime import datetime, timedelta
-from pyspark.sql.functions import lit, round as spark_round
+from pyspark.sql.functions import lit, round as spark_round, col, trim, upper, count, when
 from io import StringIO
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
+import re
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -638,196 +639,136 @@ def read_data_file_preview(file_path, num_rows=5):
 def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
-        from pyspark.sql.functions import round as spark_round
+        from pyspark.sql.functions import round as spark_round, col, trim, upper, count, when, lit
         
         if ingestion_strategy == 'type2':
-            if spark is None:
-                raise ValueError("Spark session is required for Type 2 ingestion")
-                
-            # Log original columns for debugging
-            logger.info(f"Original columns in DataFrame: {df.columns}")
+            # Original Type 2 processing logic
+            pass
+        else:
+            # Log all columns for debugging
+            logger.info(f"Available columns: {df.columns}")
             
-            # Find all standard charge columns
+            # Find all code type columns that match the pattern code|x|type
+            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+            logger.info(f"Found code type columns: {code_type_columns}")
+            
+            # Initialize variables for code and code_type
+            code_type_col = None
+            code_col = None
+            
+            # Try to find CPT values in each code type column
+            for type_col in code_type_columns:
+                # Get total count and CPT count for the column
+                type_stats = df.agg(
+                    count(col(type_col)).alias("total_count"),
+                    count(when(trim(upper(col(type_col))).like("%CPT%"), True)).alias("cpt_count")
+                ).collect()[0]
+                
+                total_count = type_stats["total_count"]
+                cpt_count = type_stats["cpt_count"]
+                
+                logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
+                
+                # Get sample of CPT values for verification
+                if cpt_count > 0:
+                    sample_cpt = df.filter(trim(upper(col(type_col))).like("%CPT%")) \
+                        .select(type_col) \
+                        .distinct() \
+                        .limit(10) \
+                        .collect()
+                    logger.info(f"Sample CPT values in {type_col}: {[row[type_col] for row in sample_cpt]}")
+                
+                if cpt_count > 0:
+                    code_type_col = type_col
+                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
+                    col_num = type_col.split('|')[1]
+                    # Construct the corresponding code column name
+                    potential_code_col = f"code|{col_num}"
+                    
+                    if potential_code_col in df.columns:
+                        code_col = potential_code_col
+                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                        # Show sample pairs of code and type for verification
+                        sample_pairs = df.filter(trim(upper(col(type_col))).like("%CPT%")) \
+                            .select(col(potential_code_col), col(type_col)) \
+                            .distinct() \
+                            .limit(5) \
+                            .collect()
+                        logger.info(f"Sample code-type pairs: {[(row[potential_code_col], row[type_col]) for row in sample_pairs]}")
+                        break
+            
+            if not code_type_col or not code_col:
+                # Log detailed error information
+                error_msg = "No code column with CPT type found in any of the code type columns"
+                logger.error(error_msg)
+                logger.error("Available columns: " + ", ".join(df.columns))
+                for col_name in code_type_columns:
+                    distinct_values = df.select(col(col_name)).distinct().collect()
+                    logger.error(f"Distinct values in {col_name}: {[row[col_name] for row in distinct_values if row[col_name] is not None]}")
+                raise ValueError(error_msg)
+            
+            logger.info(f"Selected code_type column: {code_type_col}")
+            logger.info(f"Selected code column: {code_col}")
+            
+            # Find standard charge columns
             standard_charge_columns = {
                 'gross': None,
+                'negotiated_dollar': None,
                 'min': None,
                 'max': None
             }
             
-            # Find the exact column names for standard charges (case-insensitive)
-            for col in df.columns:
-                col_lower = col.lower()
-                if 'standard_charge' in col_lower:
+            # Look for standard charge columns with different patterns
+            for col_name in df.columns:
+                col_lower = col_name.lower()
+                if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
                     if 'gross' in col_lower:
-                        standard_charge_columns['gross'] = col
+                        standard_charge_columns['gross'] = col_name
+                    elif 'negotiated_dollar' in col_lower:
+                        standard_charge_columns['negotiated_dollar'] = col_name
                     elif 'min' in col_lower:
-                        standard_charge_columns['min'] = col
+                        standard_charge_columns['min'] = col_name
                     elif 'max' in col_lower:
-                        standard_charge_columns['max'] = col
+                        standard_charge_columns['max'] = col_name
             
             logger.info(f"Found standard charge columns: {standard_charge_columns}")
             
-            # Find code and code type columns
-            code_columns = [col for col in df.columns if 'code' in col.lower() and not col.lower().endswith('type')]
-            code_type_columns = [col for col in df.columns if col.lower().endswith('type')]
+            # Create a new DataFrame with only CPT rows
+            df_cpt = df.filter(trim(upper(col(code_type_col))).like("%CPT%"))
             
-            logger.info(f"Found code columns: {code_columns}")
-            logger.info(f"Found code type columns: {code_type_columns}")
+            # Log the count of filtered rows
+            cpt_count = df_cpt.count()
+            logger.info(f"Found {cpt_count} rows with CPT code type")
             
-            # Find the code column with CPT type
-            selected_code_col = None
-            selected_type_col = None
-            
-            for type_col in code_type_columns:
-                cpt_count = df.filter(df[type_col].rlike('(?i)CPT')).count()
-                if cpt_count > 0:
-                    selected_type_col = type_col
-                    # Find corresponding code column
-                    base_name = type_col.rsplit('|', 1)[0] if '|' in type_col else type_col.replace('type', '').strip()
-                    matching_code_cols = [col for col in code_columns if base_name in col]
-                    if matching_code_cols:
-                        selected_code_col = matching_code_cols[0]
-                        break
-            
-            if not selected_code_col or not selected_type_col:
-                error_msg = "No code column with CPT type found"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            logger.info(f"Selected code column: {selected_code_col}")
-            logger.info(f"Selected type column: {selected_type_col}")
-            
-            # Create the base query for each payer/plan combination
-            base_query = f"""
-                SELECT 
-                    description,
-                    `{selected_code_col}` as code,
-                    `{selected_type_col}` as code_type
-            """
-            
-            # Add standard charge columns to base query with rounding
-            if standard_charge_columns['gross']:
-                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['gross']}` as DECIMAL(20,2)), 2) as standard_charge_gross"
-            else:
-                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_gross"
-                
-            if standard_charge_columns['min']:
-                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['min']}` as DECIMAL(20,2)), 2) as standard_charge_min"
-            else:
-                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_min"
-                
-            if standard_charge_columns['max']:
-                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['max']}` as DECIMAL(20,2)), 2) as standard_charge_max"
-            else:
-                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_max"
-            
-            # Find all payer/plan combinations with negotiated_dollar
-            payer_plan_columns = []
-            for col in df.columns:
-                if 'standard_charge' in col.lower() and 'negotiated_dollar' in col.lower():
-                    parts = col.split('|')
-                    if len(parts) >= 4:
-                        payer_plan_columns.append({
-                            'column': col,
-                            'payer': parts[1],
-                            'plan': parts[2]
-                        })
-            
-            logger.info(f"Found payer/plan columns: {payer_plan_columns}")
-            
-            # Create union queries for each payer/plan combination
-            union_queries = []
-            for pp in payer_plan_columns:
-                query = f"""
-                    {base_query},
-                    '{pp['payer']}' as payer_name,
-                    '{pp['plan']}' as plan_name,
-                    ROUND(CAST(`{pp['column']}` as DECIMAL(20,2)), 2) as standard_charge_negotiated_dollar
-                FROM __this__
-                WHERE `{pp['column']}` IS NOT NULL
-                """
-                union_queries.append(query)
-            
-            if not union_queries:
-                error_msg = "No valid payer/plan combinations found with negotiated dollar amounts"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Combine all queries
-            final_query = " UNION ALL ".join(union_queries)
-            logger.info(f"Generated final SQL query: {final_query}")
-            
-            # Create temp view and execute query
-            df.createOrReplaceTempView("__this__")
-            df_final = spark.sql(final_query)
-            
-            return df_final
-            
-        else:
-            # Original Type 1 processing logic
-            code_columns = sorted([col for col in df.columns if col.startswith('code|') and not col.endswith('|type')])
-            code_type_columns = sorted([col for col in df.columns if col.endswith('|type')])
-            
-            logger.info(f"Found code columns: {code_columns}")
-            logger.info(f"Found code type columns: {code_type_columns}")
-            
-            # Initialize variables for code and code_type
-            selected_code_col = None
-            selected_code_type_col = None
-            
-            # Find the first code column that has CPT type
-            for code_col in code_columns:
-                base_name = code_col.split('|')[1]  # Extract the number part (e.g., '1' from 'code|1')
-                type_col = f"code|{base_name}|type"
-                
-                if type_col in code_type_columns:
-                    # Check if this column has 'CPT' value
-                    cpt_count = df.filter(df[type_col].rlike('(?i)CPT')).count()
-                    logger.info(f"Column {type_col} has {cpt_count} CPT values")
-                    
-                    if cpt_count > 0:
-                        selected_code_col = code_col
-                        selected_code_type_col = type_col
-                        logger.info(f"Selected code column: {selected_code_col} with type column: {selected_code_type_col}")
-                        break
-            
-            if not selected_code_col or not selected_code_type_col:
-                error_msg = "No code column with CPT type found"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Select and rename required columns
-            required_columns = {
-                'description': 'description',
-                selected_code_col: 'code',
-                selected_code_type_col: 'code_type',
-                'payer_name': 'payer_name',
-                'plan_name': 'plan_name',
-                'standard_charge|gross': 'standard_charge_gross',
-                'standard_charge|negotiated_dollar': 'standard_charge_negotiated_dollar',
-                'standard_charge|min': 'standard_charge_min',
-                'standard_charge|max': 'standard_charge_max'
-            }
-            
-            # Filter out None keys (in case some columns weren't found)
-            required_columns = {k: v for k, v in required_columns.items() if k is not None}
-            
-            # Create a new DataFrame with only CPT rows and required columns
-            df_cpt = df.filter(df[selected_code_type_col].rlike('(?i)CPT'))
-            
-            if df_cpt.count() == 0:
+            if cpt_count == 0:
                 error_msg = "No rows found with CPT code type"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            # Select and rename columns
-            for old_col, new_col in required_columns.items():
-                if old_col in df_cpt.columns:
-                    df_cpt = df_cpt.withColumnRenamed(old_col, new_col)
+            # Map the columns to the required schema
+            column_mapping = {
+                'description': 'description',
+                code_col: 'code',
+                code_type_col: 'code_type',
+                'payer_name': 'payer_name',
+                'plan_name': 'plan_name',
+                standard_charge_columns['gross']: 'standard_charge_gross',
+                standard_charge_columns['negotiated_dollar']: 'standard_charge_negotiated_dollar',
+                standard_charge_columns['min']: 'standard_charge_min',
+                standard_charge_columns['max']: 'standard_charge_max'
+            }
             
-            # Select only the required columns that exist
-            existing_columns = [col for col in required_columns.values() if col in df_cpt.columns]
-            df_cpt = df_cpt.select(*existing_columns)
+            # Remove None values from mapping
+            column_mapping = {k: v for k, v in column_mapping.items() if k is not None}
+            
+            logger.info(f"Column mapping: {column_mapping}")
+            
+            # Create a new DataFrame with renamed columns
+            select_exprs = []
+            for old_col, new_col in column_mapping.items():
+                select_exprs.append(col(old_col).alias(new_col))
+            
+            df_cpt = df_cpt.select(*select_exprs)
             
             # Round numeric columns to 2 decimal places
             numeric_columns = [
@@ -835,9 +776,9 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                 'standard_charge_min', 'standard_charge_max'
             ]
             
-            for col in numeric_columns:
-                if col in df_cpt.columns:
-                    df_cpt = df_cpt.withColumn(col, spark_round(df_cpt[col].cast('decimal(20,2)'), 2))
+            for numeric_col in numeric_columns:
+                if numeric_col in df_cpt.columns:
+                    df_cpt = df_cpt.withColumn(numeric_col, spark_round(col(numeric_col).cast('decimal(20,2)'), 2))
             
             return df_cpt
             
@@ -1204,68 +1145,6 @@ def load_main_data():
         if conn:
             return_db_connection(conn)
 
-@app.route('/preview-hospital-data')
-def preview_hospital_data():
-    """Endpoint to get preview of hospital data"""
-    try:
-        # Get preview data from session
-        preview_data = session.get('hospital_preview')
-        if not preview_data:
-            return jsonify({
-                'success': False,
-                'error': 'No preview data available. Please upload a file first.'
-            })
-        
-        logger.info(f"Preview data from session: {preview_data}")
-        
-        # Ensure all required keys exist
-        if not all(key in preview_data for key in ['data', 'total_rows', 'original_columns']):
-            return jsonify({
-                'success': False,
-                'error': 'Incomplete preview data in session'
-            })
-        
-        return jsonify({
-            'success': True,
-            'preview_data': preview_data['data'],
-            'total_rows': preview_data['total_rows'],
-            'original_columns': preview_data['original_columns']
-        })
-        
-    except Exception as e:
-        logger.error(f"Error getting preview data: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        })
-
-@app.route('/load-split-files', methods=['POST'])
-def load_split_files():
-    try:
-        # Create tables if they don't exist
-        create_hospital_address_table()
-        create_hospital_data_table()
-        
-        # Load data from split files
-        address_file = 'USMD_Arlington_address.csv'
-        data_file = 'USMD_Arlington_data.csv'
-        
-        load_address_data(address_file)
-        load_hospital_data(data_file)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Successfully loaded data from split files'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error loading split files: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
 @app.route('/preview-data')
 def preview_data():
     """Endpoint to get preview of the data file"""
@@ -1297,18 +1176,54 @@ def preview_data():
         spark = spark_manager.get_spark()
             
         try:
-            # Read the CSV file
+            # First read the file to understand its structure
+            with open(data_file, 'r', encoding='utf-8') as f:
+                # Read first few lines for analysis
+                header_line = f.readline().strip()
+                headers = [h.strip() for h in header_line.split(',')]
+                logger.info(f"CSV Headers: {headers}")
+                
+                # Read a few data rows for analysis
+                data_rows = []
+                for _ in range(5):
+                    line = f.readline()
+                    if line:
+                        data_rows.append([cell.strip() for cell in line.split(',')])
+                
+                logger.info(f"Sample data rows: {data_rows}")
+            
+            # Read the CSV file without enforcing schema initially
             logger.info(f"Reading file: {data_file}")
             df = spark.read \
                 .option("header", "true") \
-                .option("inferSchema", "true") \
+                .option("inferSchema", "false") \
                 .option("mode", "PERMISSIVE") \
-                .option("nullValue", "NaN") \
+                .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                .option("nullValue", "") \
+                .option("nanValue", "0.0") \
+                .option("multiLine", "true") \
+                .option("quote", "\"") \
+                .option("escape", "\"") \
+                .option("encoding", "UTF-8") \
                 .csv(data_file)
             
-            # Log the columns found in the file
-            original_columns = df.columns
-            logger.info(f"Original columns found in file: {original_columns}")
+            # Log the columns and sample data
+            logger.info(f"DataFrame columns: {df.columns}")
+            logger.info("Sample data from DataFrame:")
+            df.show(5, truncate=False)
+            
+            # Log distinct values in code_type column if it exists
+            if 'code_type' in df.columns:
+                distinct_types = df.select('code_type').distinct().collect()
+                logger.info(f"Distinct values in code_type column: {[row['code_type'] for row in distinct_types if row['code_type']]}")
+            
+            # Check for columns matching code|x|type pattern
+            code_type_columns = [col for col in df.columns if '|type' in col.lower()]
+            if code_type_columns:
+                logger.info(f"Found code type columns: {code_type_columns}")
+                for col in code_type_columns:
+                    distinct_values = df.select(col).distinct().collect()
+                    logger.info(f"Distinct values in {col}: {[row[col] for row in distinct_values if row[col]]}")
             
             try:
                 processed_df = process_hospital_data(df, ingestion_strategy, spark)
@@ -1346,7 +1261,7 @@ def preview_data():
                         'error': 'Missing required columns',
                         'details': 'The file is missing some required columns',
                         'technical_details': 'Data processing resulted in empty DataFrame',
-                        'available_columns': list(original_columns),
+                        'available_columns': list(df.columns),
                         'missing_columns': missing_columns,
                         'total_rows': total_rows
                     }), 400
@@ -1356,31 +1271,58 @@ def preview_data():
                     'headers': headers,
                     'preview_data': preview_data,
                     'total_rows': total_rows,
-                    'original_columns': list(original_columns),
+                    'original_columns': list(df.columns),
                     'processed_columns': list(processed_columns)
                 })
                 
             except Exception as process_error:
                 logger.error(f"Error processing data: {str(process_error)}")
                 logger.error(traceback.format_exc())
+                
+                # Get more information about the data structure
+                column_info = {}
+                for column in df.columns:
+                    try:
+                        distinct_values = df.select(column).distinct().limit(10).collect()
+                        column_info[column] = [str(row[column]) for row in distinct_values if row[column] is not None]
+                    except Exception as e:
+                        column_info[column] = f"Error getting values: {str(e)}"
+                
                 return jsonify({
                     'success': False,
                     'error': 'Error processing data',
                     'details': str(process_error),
-                    'technical_details': traceback.format_exc(),
-                    'available_columns': list(original_columns)
+                    'technical_details': {
+                        'traceback': traceback.format_exc(),
+                        'available_columns': list(df.columns),
+                        'column_sample_values': column_info
+                    }
                 }), 500
             
         except Exception as spark_error:
             error_msg = str(spark_error)
             logger.error(f"Spark processing error: {error_msg}")
             logger.error(traceback.format_exc())
-            return jsonify({
-                'success': False,
-                'error': 'Error reading file',
-                'details': 'Failed to read the CSV file',
-                'technical_details': error_msg
-            }), 500
+            
+            # Try to read the file content to provide more details
+            try:
+                with open(data_file, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                    num_columns = len(first_line.split(','))
+                    
+                return jsonify({
+                    'success': False,
+                    'error': 'Error reading file',
+                    'details': 'Failed to read the CSV file',
+                    'technical_details': f"{error_msg}\nFirst line contains {num_columns} columns:\n{first_line}"
+                }), 500
+            except Exception as read_error:
+                return jsonify({
+                    'success': False,
+                    'error': 'Error reading file',
+                    'details': 'Failed to read the CSV file',
+                    'technical_details': f"{error_msg}\nAdditional error reading file: {str(read_error)}"
+                }), 500
             
     except Exception as e:
         error_msg = str(e)
@@ -1429,7 +1371,7 @@ def load_address_data_route():
             'error': str(e)
         }), 500
 
-def process_chunks(df, chunk_size=50000):
+def process_chunks(df, chunk_size=50000, task=None):
     """Process DataFrame in chunks and insert into database using PySpark JDBC"""
     total_rows = df.count()
     num_chunks = (total_rows + chunk_size - 1) // chunk_size
@@ -1476,6 +1418,12 @@ def process_chunks(df, chunk_size=50000):
                     properties=connection_properties
                 )
             
+            # Update progress if task is provided
+            if task:
+                progress = min(95, int((i + 1) * 100 / num_chunks))  # Cap at 95% to show final processing
+                task.progress = progress
+                task.message = f'Processing data: {progress}% complete ({i+1}/{num_chunks} chunks)'
+            
             logger.info(f"Successfully inserted chunk {i+1}/{num_chunks} ({end_idx-start_idx+1} records)")
             
         except Exception as e:
@@ -1501,12 +1449,16 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
     try:
         task = task_results[task_id]
         task.status = 'PROCESSING'
+        task.progress = 5
         task.message = 'Starting data processing...'
         
         # Create required tables (same tables for both Type 1 and Type 2)
         create_hospital_charges_table()
         create_hospital_charges_archive_table()
         create_hospital_log_table()
+        
+        task.progress = 10
+        task.message = 'Checking for existing records...'
         
         # Check for existing hospital data and handle archival
         conn = get_db_connection()
@@ -1529,6 +1481,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             
             if not cur.fetchone()[0]:
                 raise ValueError(f"Hospital '{hospital_name}' not found in address table. Please load hospital address data first.")
+            
+            task.progress = 15
+            task.message = 'Archiving existing records...'
             
             # Check for existing active records
             cur.execute("""
@@ -1594,12 +1549,14 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 cur.execute(archive_query, (hospital_name, hospital_name))
                 archived_count = cur.fetchone()[0]
                 
+                task.progress = 20
                 task.message = f'Successfully archived {archived_count:,} records for {hospital_name}...'
                 logger.info(f"Successfully archived {archived_count} records for hospital: {hospital_name}")
                 
                 # Update log data
                 log_data['archived_records'] = archived_count
             else:
+                task.progress = 20
                 task.message = f'No existing active records found for {hospital_name}, proceeding with new data ingestion...'
                 logger.info(f"No existing active records found for hospital: {hospital_name}")
             
@@ -1617,6 +1574,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             if conn:
                 return_db_connection(conn)
 
+        task.progress = 25
+        task.message = 'Initializing Spark session...'
+
         # Create Spark session with memory configuration and JDBC driver
         spark = SparkSession.builder \
             .appName("Healthcare Data Processing") \
@@ -1630,6 +1590,7 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             
         try:
             # Read and process the CSV file
+            task.progress = 30
             task.message = 'Reading CSV file...'
             df = spark.read \
                 .option("header", "true") \
@@ -1641,8 +1602,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             # Get total records before deduplication
             total_records = df.count()
             log_data['total_records'] = total_records
+            
+            task.progress = 35
             task.message = f'Found {total_records:,} total records in file...'
             
+            task.progress = 40
             task.message = 'Processing data...'
             processed_df = process_hospital_data(df, ingestion_type, spark)
             
@@ -1655,17 +1619,21 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 .withColumn('created_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp')) \
                 .withColumn('updated_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp'))
             
-            # Remove duplicates based on key fields
+            task.progress = 45
             task.message = 'Removing duplicate records...'
+            
+            # Remove duplicates based on key fields
             dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
             processed_df = processed_df.dropDuplicates(dedup_columns)
             
             unique_records = processed_df.count()
             log_data['unique_records'] = unique_records
+            
+            task.progress = 50
             task.message = f'Found {unique_records:,} unique records to process...'
             
             # Process in chunks using the new function
-            process_chunks(processed_df, chunk_size)
+            process_chunks(processed_df, chunk_size, task)
             
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
