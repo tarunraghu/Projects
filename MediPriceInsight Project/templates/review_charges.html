@@ -83,9 +83,21 @@
             content: '';
             position: absolute;
             top: 24px;
-            left: -192.3px;  /* Increased by 2% from -188.5px */
-            width: 308.4px;  /* Increased by 5% from 293.7px */
-            height: 1px;
+            left: -80px;
+            width: 80px;
+            height: 3px;
+            background-color: var(--step-pending);
+            z-index: 0;
+        }
+
+        /* Line after the step */
+        .step::after {
+            content: '';
+            position: absolute;
+            top: 24px;
+            right: -80px;
+            width: 80px;
+            height: 3px;
             background-color: var(--step-pending);
             z-index: 0;
         }
@@ -96,14 +108,19 @@
         }
 
         /* Hide line after last step */
-        .step:last-child::before {
+        .step:last-child::after {
             display: none;
         }
 
         /* Active and completed step lines */
         .step.active::before,
-        .step.completed::before {
+        .step.completed::before,
+        .step.completed::after {
             background-color: var(--step-completed);
+        }
+
+        .step.active::after {
+            background-color: var(--step-pending);
         }
 
         .step-number {
@@ -122,16 +139,20 @@
             z-index: 2;
             transition: all 0.3s ease;
             box-shadow: 0 0 0 8px #f9fafb;
+            border: 2px solid var(--step-pending);
         }
 
         .step.active .step-number {
             background-color: var(--step-active);
             color: white;
+            border-color: var(--step-active);
+            transform: scale(1.1);
         }
 
         .step.completed .step-number {
             background-color: var(--step-completed);
             color: white;
+            border-color: var(--step-completed);
         }
 
         .step-title {

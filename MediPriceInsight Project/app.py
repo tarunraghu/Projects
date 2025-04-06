@@ -17,7 +17,7 @@ import threading
 import queue
 import time
 from datetime import datetime, timedelta
-from pyspark.sql.functions import lit
+from pyspark.sql.functions import lit, round as spark_round
 from io import StringIO
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
@@ -227,10 +227,10 @@ def create_hospital_charges_table():
             code_type VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC,
-            standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_min NUMERIC,
-            standard_charge_max NUMERIC,
+            standard_charge_gross NUMERIC(20,2),
+            standard_charge_negotiated_dollar NUMERIC(20,2),
+            standard_charge_min NUMERIC(20,2),
+            standard_charge_max NUMERIC(20,2),
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -264,10 +264,10 @@ def create_hospital_charges_archive_table():
             code_type VARCHAR(50),
             payer_name VARCHAR(255),
             plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC,
-            standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_min NUMERIC,
-            standard_charge_max NUMERIC,
+            standard_charge_gross NUMERIC(20,2),
+            standard_charge_negotiated_dollar NUMERIC(20,2),
+            standard_charge_min NUMERIC(20,2),
+            standard_charge_max NUMERIC(20,2),
             original_created_at TIMESTAMP,
             archive_reason TEXT,
             archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -638,6 +638,8 @@ def read_data_file_preview(file_path, num_rows=5):
 def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
+        from pyspark.sql.functions import round as spark_round
+        
         if ingestion_strategy == 'type2':
             if spark is None:
                 raise ValueError("Spark session is required for Type 2 ingestion")
@@ -703,21 +705,21 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                     `{selected_type_col}` as code_type
             """
             
-            # Add standard charge columns to base query
+            # Add standard charge columns to base query with rounding
             if standard_charge_columns['gross']:
-                base_query += f",\n    `{standard_charge_columns['gross']}` as standard_charge_gross"
+                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['gross']}` as DECIMAL(20,2)), 2) as standard_charge_gross"
             else:
-                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_gross"
+                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_gross"
                 
             if standard_charge_columns['min']:
-                base_query += f",\n    `{standard_charge_columns['min']}` as standard_charge_min"
+                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['min']}` as DECIMAL(20,2)), 2) as standard_charge_min"
             else:
-                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_min"
+                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_min"
                 
             if standard_charge_columns['max']:
-                base_query += f",\n    `{standard_charge_columns['max']}` as standard_charge_max"
+                base_query += f",\n    ROUND(CAST(`{standard_charge_columns['max']}` as DECIMAL(20,2)), 2) as standard_charge_max"
             else:
-                base_query += ",\n    CAST(NULL as DECIMAL(38,18)) as standard_charge_max"
+                base_query += ",\n    CAST(NULL as DECIMAL(20,2)) as standard_charge_max"
             
             # Find all payer/plan combinations with negotiated_dollar
             payer_plan_columns = []
@@ -740,7 +742,7 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                     {base_query},
                     '{pp['payer']}' as payer_name,
                     '{pp['plan']}' as plan_name,
-                    `{pp['column']}` as standard_charge_negotiated_dollar
+                    ROUND(CAST(`{pp['column']}` as DECIMAL(20,2)), 2) as standard_charge_negotiated_dollar
                 FROM __this__
                 WHERE `{pp['column']}` IS NOT NULL
                 """
@@ -758,16 +760,6 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             # Create temp view and execute query
             df.createOrReplaceTempView("__this__")
             df_final = spark.sql(final_query)
-            
-            # Cast numeric columns to correct type
-            numeric_columns = [
-                'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                'standard_charge_min', 'standard_charge_max'
-            ]
-            
-            for col in numeric_columns:
-                if col in df_final.columns:
-                    df_final = df_final.withColumn(col, df_final[col].cast('decimal(38,18)'))
             
             return df_final
             
@@ -814,11 +806,7 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                 'standard_charge|gross': 'standard_charge_gross',
                 'standard_charge|negotiated_dollar': 'standard_charge_negotiated_dollar',
                 'standard_charge|min': 'standard_charge_min',
-                'standard_charge|max': 'standard_charge_max',
-                'modifiers': 'modifiers',
-                'setting': 'setting',
-                'drug_unit_of_measurement': 'drug_unit_of_measurement',
-                'drug_type_of_measurement': 'drug_type_of_measurement'
+                'standard_charge|max': 'standard_charge_max'
             }
             
             # Filter out None keys (in case some columns weren't found)
@@ -841,13 +829,15 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             existing_columns = [col for col in required_columns.values() if col in df_cpt.columns]
             df_cpt = df_cpt.select(*existing_columns)
             
-            # Convert numeric columns
-            numeric_columns = ['standard_charge_gross', 'standard_charge_negotiated_dollar', 
-                             'standard_charge_min', 'standard_charge_max']
+            # Round numeric columns to 2 decimal places
+            numeric_columns = [
+                'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                'standard_charge_min', 'standard_charge_max'
+            ]
             
             for col in numeric_columns:
                 if col in df_cpt.columns:
-                    df_cpt = df_cpt.withColumn(col, df_cpt[col].cast('decimal(38,18)'))
+                    df_cpt = df_cpt.withColumn(col, spark_round(df_cpt[col].cast('decimal(20,2)'), 2))
             
             return df_cpt
             
