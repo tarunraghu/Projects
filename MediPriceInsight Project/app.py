@@ -17,7 +17,7 @@ import threading
 import queue
 import time
 from datetime import datetime, timedelta
-from pyspark.sql.functions import lit, round as spark_round, col, trim, upper, count, when
+from pyspark.sql.functions import lit, round as spark_round, col, trim, upper, count, when, split, element_at, explode, array, struct, expr, regexp_replace
 from io import StringIO
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
@@ -639,12 +639,9 @@ def read_data_file_preview(file_path, num_rows=5):
 def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
-        from pyspark.sql.functions import round as spark_round, col, trim, upper, count, when, lit
+        from pyspark.sql.functions import round as spark_round, col, trim, upper, count, when, lit, split, element_at, explode, array, struct, expr, regexp_replace
         
         if ingestion_strategy == 'type2':
-            # Original Type 2 processing logic
-            pass
-        else:
             # Log all columns for debugging
             logger.info(f"Available columns: {df.columns}")
             
@@ -669,14 +666,175 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                 
                 logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
                 
-                # Get sample of CPT values for verification
                 if cpt_count > 0:
-                    sample_cpt = df.filter(trim(upper(col(type_col))).like("%CPT%")) \
-                        .select(type_col) \
-                        .distinct() \
-                        .limit(10) \
-                        .collect()
-                    logger.info(f"Sample CPT values in {type_col}: {[row[type_col] for row in sample_cpt]}")
+                    code_type_col = type_col
+                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
+                    col_num = type_col.split('|')[1]
+                    # Construct the corresponding code column name
+                    potential_code_col = f"code|{col_num}"
+                    
+                    if potential_code_col in df.columns:
+                        code_col = potential_code_col
+                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                        break
+            
+            if not code_type_col or not code_col:
+                error_msg = "No code column with CPT type found in any of the code type columns"
+                logger.error(error_msg)
+                logger.error("Available columns: " + ", ".join(df.columns))
+                raise ValueError(error_msg)
+            
+            # Find standard charge columns
+            standard_charge_columns = {
+                'gross': None,
+                'min': None,
+                'max': None
+            }
+            
+            # Find all negotiated dollar columns and other related columns
+            negotiated_dollar_columns = []
+            negotiated_algorithm_columns = []
+            estimated_amount_columns = []
+            
+            # Look for standard charge columns with different patterns
+            for col_name in df.columns:
+                col_lower = col_name.lower()
+                if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
+                    if 'gross' in col_lower:
+                        standard_charge_columns['gross'] = col_name
+                    elif 'negotiated_dollar' in col_lower:
+                        negotiated_dollar_columns.append(col_name)
+                    elif 'negotiated_algorithm' in col_lower:
+                        negotiated_algorithm_columns.append(col_name)
+                    elif 'min' in col_lower:
+                        standard_charge_columns['min'] = col_name
+                    elif 'max' in col_lower:
+                        standard_charge_columns['max'] = col_name
+                elif 'estimated_amount' in col_lower:
+                    estimated_amount_columns.append(col_name)
+            
+            logger.info(f"Found standard charge columns: {standard_charge_columns}")
+            logger.info(f"Found negotiated dollar columns: {negotiated_dollar_columns}")
+            
+            # Create a new DataFrame with only CPT rows
+            df_cpt = df.filter(trim(upper(col(code_type_col))).like("%CPT%"))
+            
+            # Log the count of filtered rows
+            cpt_count = df_cpt.count()
+            logger.info(f"Found {cpt_count} rows with CPT code type")
+            
+            if cpt_count == 0:
+                error_msg = "No rows found with CPT code type"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # First select all necessary columns
+            df_with_columns = df_cpt.select(
+                'description',
+                code_col,
+                code_type_col,
+                standard_charge_columns['gross'],
+                standard_charge_columns['min'],
+                standard_charge_columns['max'],
+                *negotiated_dollar_columns,  # Include all negotiated dollar columns
+                *negotiated_algorithm_columns,  # Include all negotiated algorithm columns
+                *estimated_amount_columns  # Include all estimated amount columns
+            )
+
+            # Create structs for negotiated dollar columns
+            negotiated_structs = []
+            for col_name in negotiated_dollar_columns:
+                parts = col_name.split('|')
+                if len(parts) >= 4:  # standard_charge|payer|plan|negotiated_dollar
+                    payer = parts[1]
+                    plan = parts[2]
+                    
+                    # Find corresponding columns for this payer/plan combination
+                    base_payer_plan = f"{parts[0]}|{payer}|{plan}"
+                    
+                    # Get corresponding columns
+                    negotiated_algorithm = next((c for c in negotiated_algorithm_columns if c.startswith(base_payer_plan)), None)
+                    estimated_amount = next((c for c in estimated_amount_columns if c.startswith(base_payer_plan)), None)
+                    
+                    # Create struct with all related columns
+                    negotiated_structs.append(
+                        struct(
+                            lit(payer).alias("payer_name"),
+                            lit(plan).alias("plan_name"),
+                            col(col_name).cast('decimal(20,2)').alias("standard_charge_negotiated_dollar"),
+                            col(negotiated_algorithm).alias("standard_charge_negotiated_algorithm") if negotiated_algorithm else lit(None).alias("standard_charge_negotiated_algorithm"),
+                            col(estimated_amount).cast('decimal(20,2)').alias("estimated_amount") if estimated_amount else lit(None).cast('decimal(20,2)').alias("estimated_amount")
+                        )
+                    )
+            
+            # Create the array of structs and explode
+            if negotiated_structs:
+                # Create the array of structs
+                df_exploded = df_with_columns.withColumn(
+                    "negotiated_info",
+                    explode(array(*negotiated_structs))
+                )
+            else:
+                # If no negotiated dollar columns found, create empty structs
+                df_exploded = df_with_columns.withColumn("negotiated_info", 
+                    explode(array(struct(
+                        lit("").alias("payer_name"),
+                        lit("").alias("plan_name"),
+                        lit(0.0).cast('decimal(20,2)').alias("standard_charge_negotiated_dollar"),
+                        lit(None).alias("standard_charge_negotiated_algorithm"),
+                        lit(None).cast('decimal(20,2)').alias("estimated_amount")
+                    ))))
+            
+            # Select final columns
+            df_final = df_exploded.select(
+                col("description"),
+                col(code_col).alias("code"),
+                col(code_type_col).alias("code_type"),
+                col("negotiated_info.payer_name"),
+                col("negotiated_info.plan_name"),
+                col(standard_charge_columns['gross']).alias("standard_charge_gross"),
+                col("negotiated_info.standard_charge_negotiated_dollar"),
+                col(standard_charge_columns['min']).alias("standard_charge_min"),
+                col(standard_charge_columns['max']).alias("standard_charge_max")
+            )
+            
+            # Round numeric columns to 2 decimal places
+            numeric_columns = [
+                'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                'standard_charge_min', 'standard_charge_max'
+            ]
+            
+            for numeric_col in numeric_columns:
+                if numeric_col in df_final.columns:
+                    df_final = df_final.withColumn(numeric_col, spark_round(col(numeric_col).cast('decimal(20,2)'), 2))
+            
+            return df_final
+            
+        else:
+            # Original Type 1 processing logic
+            # Log all columns for debugging
+            logger.info(f"Available columns: {df.columns}")
+            
+            # Find all code type columns that match the pattern code|x|type
+            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+            logger.info(f"Found code type columns: {code_type_columns}")
+            
+            # Initialize variables for code and code_type
+            code_type_col = None
+            code_col = None
+            
+            # Try to find CPT values in each code type column
+            for type_col in code_type_columns:
+                # Get total count and CPT count for the column
+                type_stats = df.agg(
+                    count(col(type_col)).alias("total_count"),
+                    count(when(trim(upper(col(type_col))).like("%CPT%"), True)).alias("cpt_count")
+                ).collect()[0]
+                
+                total_count = type_stats["total_count"]
+                cpt_count = type_stats["cpt_count"]
+                
+                logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
                 
                 if cpt_count > 0:
                     code_type_col = type_col
@@ -688,27 +846,13 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                     if potential_code_col in df.columns:
                         code_col = potential_code_col
                         logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
-                        # Show sample pairs of code and type for verification
-                        sample_pairs = df.filter(trim(upper(col(type_col))).like("%CPT%")) \
-                            .select(col(potential_code_col), col(type_col)) \
-                            .distinct() \
-                            .limit(5) \
-                            .collect()
-                        logger.info(f"Sample code-type pairs: {[(row[potential_code_col], row[type_col]) for row in sample_pairs]}")
                         break
             
             if not code_type_col or not code_col:
-                # Log detailed error information
                 error_msg = "No code column with CPT type found in any of the code type columns"
                 logger.error(error_msg)
                 logger.error("Available columns: " + ", ".join(df.columns))
-                for col_name in code_type_columns:
-                    distinct_values = df.select(col(col_name)).distinct().collect()
-                    logger.error(f"Distinct values in {col_name}: {[row[col_name] for row in distinct_values if row[col_name] is not None]}")
                 raise ValueError(error_msg)
-            
-            logger.info(f"Selected code_type column: {code_type_col}")
-            logger.info(f"Selected code column: {code_col}")
             
             # Find standard charge columns
             standard_charge_columns = {
@@ -1177,118 +1321,196 @@ def preview_data():
         try:
             # For Type 2 ingestion, use a simpler preview approach
             if ingestion_strategy == 'type2':
-                # Read just the first 5 rows for preview
-                df = spark.read \
-                    .option("header", "true") \
-                    .option("inferSchema", "false") \
-                    .option("mode", "PERMISSIVE") \
-                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
-                    .option("nullValue", "") \
-                    .option("nanValue", "0.0") \
-                    .option("multiLine", "true") \
-                    .option("quote", "\"") \
-                    .option("escape", "\"") \
-                    .option("encoding", "UTF-8") \
-                    .csv(data_file) \
-                    .limit(5)  # Limit to 5 rows for preview
-                
-                # Get total rows count from a separate count operation
-                total_rows = spark.read \
-                    .option("header", "true") \
-                    .csv(data_file) \
-                    .count()
-                
-                # Find code type columns that match the pattern code|x|type
-                code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
-                logger.info(f"Found code type columns: {code_type_columns}")
-                
-                # Find standard charge columns and extract payer/plan info
-                standard_charge_columns = {
-                    'gross': None,
-                    'negotiated_dollar': None,
-                    'min': None,
-                    'max': None
-                }
-                
-                # Dictionary to store payer and plan names from column names
-                payer_plan_info = {}
-                
-                # Look for standard charge columns with different patterns
-                for col_name in df.columns:
-                    col_lower = col_name.lower()
-                    if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
-                        # Extract payer and plan names from negotiated_dollar columns
-                        if 'negotiated_dollar' in col_lower:
-                            parts = col_name.split('|')
-                            if len(parts) >= 4:  # standard_charge|x|y|negotiated_dollar
-                                payer_name = parts[1]
-                                plan_name = parts[2]
-                                payer_plan_info[col_name] = {
-                                    'payer_name': payer_name,
-                                    'plan_name': plan_name
-                                }
-                            standard_charge_columns['negotiated_dollar'] = col_name
-                        elif 'gross' in col_lower:
-                            standard_charge_columns['gross'] = col_name
-                        elif 'min' in col_lower:
-                            standard_charge_columns['min'] = col_name
-                        elif 'max' in col_lower:
-                            standard_charge_columns['max'] = col_name
-                
-                logger.info(f"Found standard charge columns: {standard_charge_columns}")
-                logger.info(f"Extracted payer/plan info: {payer_plan_info}")
-                
-                # Create preview data with actual values
-                preview_rows = []
-                for row in df.collect():
-                    row_dict = row.asDict()
+                try:
+                    # Read the CSV file
+                    df = spark.read \
+                        .option("header", "true") \
+                        .option("inferSchema", "false") \
+                        .option("mode", "PERMISSIVE") \
+                        .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                        .option("nullValue", "") \
+                        .option("nanValue", "0.0") \
+                        .option("multiLine", "true") \
+                        .option("quote", "\"") \
+                        .option("escape", "\"") \
+                        .option("encoding", "UTF-8") \
+                        .csv(data_file)
+                    
+                    if df is None:
+                        raise ValueError("Failed to read CSV file: DataFrame is None")
+                    
+                    # Get total rows count
+                    total_rows = df.count()
+                    logger.info(f"Total rows in file: {total_rows}")
+                    
+                    if total_rows == 0:
+                        raise ValueError("CSV file is empty or contains no valid records")
+                    
+                    # Find code type columns that match the pattern code|x|type
+                    code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+                    logger.info(f"Found code type columns: {code_type_columns}")
+                    
+                    if not code_type_columns:
+                        raise ValueError("No code type columns found in the CSV file")
+                    
+                    # Find the code type column with CPT values
+                    code_type_col = None
+                    code_col = None
+                    
+                    # Try to find CPT values in each code type column
                     for type_col in code_type_columns:
-                        if row_dict.get(type_col):
+                        # Get total count and CPT count for the column
+                        type_stats = df.agg(
+                            count(df[type_col]).alias("total_count"),
+                            count(when(trim(upper(df[type_col])) == "CPT", True)).alias("cpt_count")
+                        ).collect()[0]
+                        
+                        total_count = type_stats["total_count"]
+                        cpt_count = type_stats["cpt_count"]
+                        
+                        logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
+                        
+                        if cpt_count > 0:
+                            code_type_col = type_col
                             # Extract the number from the type column (e.g., 'code|3|type' -> '3')
                             col_num = type_col.split('|')[1]
-                            code_col = f"code|{col_num}"
+                            # Construct the corresponding code column name
+                            potential_code_col = f"code|{col_num}"
                             
-                            if code_col in row_dict:
-                                # Get actual values from the row
-                                preview_row = {
-                                    'description': row_dict.get('description', ''),
-                                    'code': row_dict.get(code_col, ''),
-                                    'code_type': row_dict.get(type_col, ''),
-                                }
+                            if potential_code_col in df.columns:
+                                code_col = potential_code_col
+                                logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                                break
+                    
+                    if not code_type_col or not code_col:
+                        error_msg = "No code column with CPT type found in any of the code type columns"
+                        logger.error(error_msg)
+                        logger.error("Available columns: " + ", ".join(df.columns))
+                        raise ValueError(error_msg)
+                    
+                    # Filter for CPT rows - strictly only CPT values, case-insensitive
+                    df_cpt = df.filter(trim(upper(df[code_type_col])) == "CPT")
+                    
+                    # Log the count of filtered rows
+                    cpt_count = df_cpt.count()
+                    logger.info(f"Found {cpt_count} rows with CPT code type")
+                    
+                    if cpt_count == 0:
+                        error_msg = "No rows found with CPT code type"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    # Get exactly 5 preview rows from CPT filtered data
+                    df_preview = df_cpt.limit(5)
+                    
+                    # Verify we got exactly 5 rows
+                    preview_count = df_preview.count()
+                    if preview_count < 5:
+                        logger.warning(f"Only found {preview_count} CPT rows for preview (less than requested 5)")
+                    
+                    # Find standard charge columns and extract payer/plan info
+                    standard_charge_columns = {
+                        'gross': None,
+                        'min': None,
+                        'max': None
+                    }
+                    
+                    # Dictionary to store payer and plan names from column names
+                    payer_plan_info = {}
+                    
+                    # Look for standard charge columns with different patterns
+                    for col_name in df.columns:
+                        col_lower = col_name.lower()
+                        if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
+                            # Extract payer and plan names from negotiated_dollar columns
+                            if 'negotiated_dollar' in col_lower:
+                                parts = col_name.split('|')
+                                if len(parts) >= 4:  # standard_charge|x|y|negotiated_dollar
+                                    payer_name = parts[1]
+                                    plan_name = parts[2]
+                                    payer_plan_info[col_name] = {
+                                        'payer_name': payer_name,
+                                        'plan_name': plan_name
+                                    }
+                                standard_charge_columns['negotiated_dollar'] = col_name
+                            elif 'gross' in col_lower:
+                                standard_charge_columns['gross'] = col_name
+                            elif 'min' in col_lower:
+                                standard_charge_columns['min'] = col_name
+                            elif 'max' in col_lower:
+                                standard_charge_columns['max'] = col_name
+                    
+                    logger.info(f"Found standard charge columns: {standard_charge_columns}")
+                    logger.info(f"Extracted payer/plan info: {payer_plan_info}")
+                    
+                    if not standard_charge_columns['negotiated_dollar']:
+                        raise ValueError("No negotiated dollar columns found in the CSV file")
+                    
+                    # Create preview data with actual values
+                    preview_rows = []
+                    for row in df_preview.collect():
+                        row_dict = row.asDict()
+                        for type_col in code_type_columns:
+                            if row_dict.get(type_col):
+                                # Extract the number from the type column (e.g., 'code|3|type' -> '3')
+                                col_num = type_col.split('|')[1]
+                                code_col = f"code|{col_num}"
                                 
-                                # Add charge values and extract payer/plan info
-                                if standard_charge_columns['negotiated_dollar']:
-                                    negotiated_col = standard_charge_columns['negotiated_dollar']
-                                    preview_row['standard_charge_negotiated_dollar'] = row_dict.get(negotiated_col, '')
-                                    # Get payer and plan names from the column name
-                                    if negotiated_col in payer_plan_info:
-                                        preview_row['payer_name'] = payer_plan_info[negotiated_col]['payer_name']
-                                        preview_row['plan_name'] = payer_plan_info[negotiated_col]['plan_name']
-                                
-                                if standard_charge_columns['gross']:
-                                    preview_row['standard_charge_gross'] = row_dict.get(standard_charge_columns['gross'], '')
-                                if standard_charge_columns['min']:
-                                    preview_row['standard_charge_min'] = row_dict.get(standard_charge_columns['min'], '')
-                                if standard_charge_columns['max']:
-                                    preview_row['standard_charge_max'] = row_dict.get(standard_charge_columns['max'], '')
-                                
-                                preview_rows.append(preview_row)
-                
-                # Get the processed columns
-                processed_columns = [
-                    'description', 'code', 'code_type', 'payer_name', 'plan_name',
-                    'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                    'standard_charge_min', 'standard_charge_max'
-                ]
-                
-                return jsonify({
-                    'success': True,
-                    'headers': processed_columns,
-                    'preview_data': preview_rows,
-                    'total_rows': total_rows,
-                    'original_columns': list(df.columns),
-                    'processed_columns': processed_columns
-                })
+                                if code_col in row_dict:
+                                    # Get actual values from the row
+                                    preview_row = {
+                                        'description': row_dict.get('description', ''),
+                                        'code': row_dict.get(code_col, ''),
+                                        'code_type': row_dict.get(type_col, ''),
+                                    }
+                                    
+                                    # Add charge values and extract payer/plan info
+                                    if standard_charge_columns['negotiated_dollar']:
+                                        negotiated_col = standard_charge_columns['negotiated_dollar']
+                                        preview_row['standard_charge_negotiated_dollar'] = row_dict.get(negotiated_col, '')
+                                        # Get payer and plan names from the column name
+                                        if negotiated_col in payer_plan_info:
+                                            preview_row['payer_name'] = payer_plan_info[negotiated_col]['payer_name']
+                                            preview_row['plan_name'] = payer_plan_info[negotiated_col]['plan_name']
+                                    
+                                    if standard_charge_columns['gross']:
+                                        preview_row['standard_charge_gross'] = row_dict.get(standard_charge_columns['gross'], '')
+                                    if standard_charge_columns['min']:
+                                        preview_row['standard_charge_min'] = row_dict.get(standard_charge_columns['min'], '')
+                                    if standard_charge_columns['max']:
+                                        preview_row['standard_charge_max'] = row_dict.get(standard_charge_columns['max'], '')
+                                    
+                                    preview_rows.append(preview_row)
+                    
+                    if not preview_rows:
+                        raise ValueError("No valid records found after processing")
+                    
+                    # Get the processed columns
+                    processed_columns = [
+                        'description', 'code', 'code_type', 'payer_name', 'plan_name',
+                        'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                        'standard_charge_min', 'standard_charge_max'
+                    ]
+                    
+                    return jsonify({
+                        'success': True,
+                        'headers': processed_columns,
+                        'preview_data': preview_rows,
+                        'total_rows': total_rows,
+                        'original_columns': list(df.columns),
+                        'processed_columns': processed_columns
+                    })
+                    
+                except Exception as e:
+                    error_msg = f"Error processing preview data: {str(e)}"
+                    logger.error(error_msg)
+                    logger.error(traceback.format_exc())
+                    return jsonify({
+                        'success': False,
+                        'error': error_msg,
+                        'details': 'Failed to process the CSV file for preview',
+                        'total_rows': 0
+                    }), 400
             
             # For Type 1 ingestion, continue with existing logic
             # First read the file to understand its structure
@@ -1568,94 +1790,31 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
     try:
         task = task_results[task_id]
         task.status = 'PROCESSING'
-        task.progress = 5
-        task.message = 'Starting data processing...'
+        task.progress = 0
+        task.message = 'Starting Type 2 ingestion...'
         
-        # Create required tables (same tables for both Type 1 and Type 2)
+        # Create required tables
         create_hospital_charges_table()
         create_hospital_charges_archive_table()
         create_hospital_log_table()
         
         task.progress = 10
-        task.message = 'Checking for existing records...'
+        task.message = 'Archiving existing records...'
         
-        # Check for existing hospital data and handle archival
-        conn = get_db_connection()
-        archived_count = 0
-        
+        # Archive existing records
         try:
-            cur = conn.cursor()
-            
-            # Begin transaction
-            cur.execute("BEGIN;")
-            
-            # First verify hospital exists in address table
-            cur.execute("""
-                SELECT EXISTS (
-                    SELECT 1 
-                    FROM hospital_address 
-                    WHERE hospital_name = %s
-                );
-            """, (hospital_name,))
-            
-            if not cur.fetchone()[0]:
-                raise ValueError(f"Hospital '{hospital_name}' not found in address table. Please load hospital address data first.")
-            
-            task.progress = 15
-            task.message = 'Archiving existing records...'
-            
-            # Check for existing active records
-            cur.execute("""
-                SELECT COUNT(*) 
-                FROM hospital_charges
-                WHERE hospital_name = %s AND is_active = TRUE;
-            """, (hospital_name,))
-            
-            existing_records = cur.fetchone()[0]
-            
-            if existing_records > 0:
-                task.message = f'Found {existing_records:,} existing active records for {hospital_name}...'
-                logger.info(f"Found {existing_records} existing active records for hospital: {hospital_name}")
-                
-                # Archive existing records
-                archive_query = """
-                CALL public.archive_hospital_records(%s);
-                """
-                
-                # Execute archive query
-                cur.execute(archive_query, (hospital_name,))
-                cur.execute(archive_query, (hospital_name, hospital_name))
-                archived_count = cur.fetchone()[0]
-                
-                task.progress = 20
-                task.message = f'Successfully archived {archived_count:,} records for {hospital_name}...'
-                logger.info(f"Successfully archived {archived_count} records for hospital: {hospital_name}")
-                
-                # Update log data
-                log_data['archived_records'] = archived_count
-            else:
-                task.progress = 20
-                task.message = f'No existing active records found for {hospital_name}, proceeding with new data ingestion...'
-                logger.info(f"No existing active records found for hospital: {hospital_name}")
-            
-            # Commit transaction
-            conn.commit()
-            
+            archived_count = archive_hospital_records(hospital_name)
+            log_data['archived_records'] = archived_count
+            task.message = f'Archived {archived_count:,} existing records'
         except Exception as e:
-            conn.rollback()
-            logger.error(f"Error during hospital data check/archival: {str(e)}")
+            logger.error(f"Error during hospital data archival: {str(e)}")
             logger.error(traceback.format_exc())
             raise
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                return_db_connection(conn)
 
-        task.progress = 25
-        task.message = 'Initializing Spark session...'
+        task.progress = 20
+        task.message = 'Reading and processing data file...'
 
-        # Create Spark session with memory configuration and JDBC driver
+        # Create Spark session
         spark = SparkSession.builder \
             .appName("Healthcare Data Processing") \
             .config("spark.driver.memory", "4g") \
@@ -1667,56 +1826,72 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             .getOrCreate()
             
         try:
-            # Read and process the CSV file
-            task.progress = 30
-            task.message = 'Reading CSV file...'
+            # Read CSV file
             df = spark.read \
                 .option("header", "true") \
                 .option("inferSchema", "true") \
                 .option("mode", "PERMISSIVE") \
                 .option("nullValue", "NaN") \
+                .option("encoding", "UTF-8") \
+                .option("emptyValue", "") \
+                .option("treatEmptyValuesAsNulls", "true") \
                 .csv(data_file)
             
-            # Get total records before deduplication
+            if df is None:
+                raise ValueError("Failed to read CSV file: DataFrame is None")
+            
+            # Get total records
             total_records = df.count()
+            if total_records == 0:
+                raise ValueError("CSV file is empty or contains no valid records")
+            
             log_data['total_records'] = total_records
+            task.progress = 30
+            task.message = f'Processing {total_records:,} records...'
             
-            task.progress = 35
-            task.message = f'Found {total_records:,} total records in file...'
-            
-            task.progress = 40
-            task.message = 'Processing data...'
+            # Process data
             processed_df = process_hospital_data(df, ingestion_type, spark)
             
-            # Add hospital name column and active flag
-            processed_df = processed_df.withColumn('hospital_name', lit(hospital_name))
+            if processed_df is None:
+                raise ValueError("Failed to process hospital data: Processed DataFrame is None")
             
-            # Add timestamp columns and active flag with proper datetime format
+            # Add hospital name and timestamps
+            processed_df = processed_df.withColumn('hospital_name', lit(hospital_name))
             current_time = datetime.now()
             processed_df = processed_df.withColumn('is_active', lit(True)) \
                 .withColumn('created_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp')) \
                 .withColumn('updated_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp'))
             
-            task.progress = 45
+            task.progress = 50
             task.message = 'Removing duplicate records...'
             
-            # Remove duplicates based on key fields
+            # Remove duplicates
             dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
             processed_df = processed_df.dropDuplicates(dedup_columns)
             
             unique_records = processed_df.count()
+            if unique_records == 0:
+                raise ValueError("No valid records found after processing and deduplication")
+            
             log_data['unique_records'] = unique_records
+            task.progress = 60
+            task.message = f'Loading {unique_records:,} unique records...'
             
-            task.progress = 50
-            task.message = f'Found {unique_records:,} unique records to process...'
+            # Process in chunks with progress updates
+            total_chunks = (unique_records + chunk_size - 1) // chunk_size
+            progress_increment = 35 / total_chunks  # Remaining 35% (60-95) divided by chunks
             
-            # Process in chunks using the new function
-            process_chunks(processed_df, chunk_size, task)
+            def update_progress(chunk_num):
+                progress = min(95, 60 + int(chunk_num * progress_increment))
+                task.progress = progress
+                task.message = f'Loading data: {progress}% complete (chunk {chunk_num + 1}/{total_chunks})'
+            
+            process_chunks(processed_df, chunk_size, update_progress)
             
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
             
-            # Format final elapsed time
+            # Format elapsed time
             final_minutes = int(processing_time // 60)
             final_seconds = int(processing_time % 60)
             final_elapsed_str = f"{final_minutes}m {final_seconds}s"
@@ -1724,7 +1899,7 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             # Final progress update
             task.progress = 100
             task.message = (
-                f'Processing complete!\n'
+                f'Type 2 ingestion complete!\n'
                 f'Archived: {archived_count:,} records\n'
                 f'Processed: {unique_records:,} new records\n'
                 f'Elapsed time: {final_elapsed_str}'
@@ -1741,28 +1916,6 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             conn = get_db_connection()
             try:
                 log_ingestion_details(conn, log_data)
-                
-                # Check if the ingestion was successful
-                if log_data['status'] == 'SUCCESS':
-                    logger.info(f"Ingestion successful for hospital: {hospital_name}. Keeping hospital address record.")
-                else:
-                    # If ingestion failed, delete the hospital address record
-                    logger.info(f"Ingestion failed for hospital: {hospital_name}. Deleting hospital address record.")
-                    cur = conn.cursor()
-                    try:
-                        cur.execute("""
-                            DELETE FROM hospital_address 
-                            WHERE hospital_name = %s
-                        """, (hospital_name,))
-                        conn.commit()
-                        logger.info(f"Successfully deleted hospital address record for: {hospital_name}")
-                    except Exception as e:
-                        conn.rollback()
-                        logger.error(f"Error deleting hospital address record: {str(e)}")
-                        logger.error(traceback.format_exc())
-                    finally:
-                        if cur:
-                            cur.close()
             finally:
                 return_db_connection(conn)
             
@@ -1844,6 +1997,9 @@ def load_charges():
                 'details': 'Hospital address data is required'
             }), 400
         
+        # Get ingestion strategy from session
+        ingestion_strategy = session.get('ingestion_strategy', 'type1')
+        
         # Verify hospital exists in address table and get exact name
         conn = None
         try:
@@ -1889,7 +2045,7 @@ def load_charges():
             'hospital_name': hospital_name,  # Use exact name from database
             'task_id': task_id,
             'user_name': session.get('user_name', 'system'),
-            'ingestion_type': session.get('ingestion_strategy', 'unknown'),
+            'ingestion_type': ingestion_strategy,
             'chunk_size': 50000
         })
         
@@ -2136,6 +2292,74 @@ def log_error():
             'success': False,
             'error': str(e)
         }), 500
+
+def archive_hospital_records(hospital_name):
+    """Archive existing records for a hospital"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Begin transaction
+        cur.execute("BEGIN;")
+        
+        # Get count of records to be archived
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM hospital_charges 
+            WHERE hospital_name = %s AND is_active = TRUE;
+        """, (hospital_name,))
+        
+        count = cur.fetchone()[0]
+        
+        if count > 0:
+            # Archive existing records
+            cur.execute("""
+                INSERT INTO hospital_charges_archive (
+                    hospital_name, description, code, code_type, 
+                    payer_name, plan_name, standard_charge_gross,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, original_created_at, archive_reason
+                )
+                SELECT 
+                    hospital_name, description, code, code_type,
+                    payer_name, plan_name, standard_charge_gross,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, created_at, 'New data ingestion'
+                FROM hospital_charges
+                WHERE hospital_name = %s AND is_active = TRUE;
+            """, (hospital_name,))
+            
+            # Mark existing records as inactive
+            cur.execute("""
+                UPDATE hospital_charges 
+                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE hospital_name = %s AND is_active = TRUE;
+            """, (hospital_name,))
+            
+            # Commit transaction
+            conn.commit()
+            
+            logger.info(f"Successfully archived {count} records for hospital: {hospital_name}")
+            return count
+        else:
+            # Commit transaction even if no records to archive
+            conn.commit()
+            logger.info(f"No active records found to archive for hospital: {hospital_name}")
+            return 0
+            
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Error archiving hospital records: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
 
 if __name__ == '__main__':
     app.run(debug=True)
