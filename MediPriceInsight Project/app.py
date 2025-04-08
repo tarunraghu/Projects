@@ -1319,7 +1319,7 @@ def preview_data():
         spark = spark_manager.get_spark()
             
         try:
-            # For Type 2 ingestion, use a simpler preview approach
+            # For Type 2 ingestion, use the same DataFrame structure as the final load
             if ingestion_strategy == 'type2':
                 try:
                     # Read the CSV file
@@ -1346,159 +1346,52 @@ def preview_data():
                     if total_rows == 0:
                         raise ValueError("CSV file is empty or contains no valid records")
                     
-                    # Find code type columns that match the pattern code|x|type
-                    code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
-                    logger.info(f"Found code type columns: {code_type_columns}")
+                    # Process the data using the same logic as the final load
+                    processed_df = process_hospital_data(df, ingestion_strategy, spark)
                     
-                    if not code_type_columns:
-                        raise ValueError("No code type columns found in the CSV file")
+                    if processed_df is None:
+                        raise ValueError("Failed to process hospital data: Processed DataFrame is None")
                     
-                    # Find the code type column with CPT values
-                    code_type_col = None
-                    code_col = None
+                    # Get exactly 5 preview rows
+                    df_preview = processed_df.limit(5)
                     
-                    # Try to find CPT values in each code type column
-                    for type_col in code_type_columns:
-                        # Get total count and CPT count for the column
-                        type_stats = df.agg(
-                            count(df[type_col]).alias("total_count"),
-                            count(when(trim(upper(df[type_col])) == "CPT", True)).alias("cpt_count")
-                        ).collect()[0]
+                    # Convert to Pandas and handle NaN values
+                    pandas_df = df_preview.toPandas()
+                    preview_data = pandas_df.where(pandas_df.notna(), None).to_dict('records')
+                    
+                    # Get column headers
+                    headers = processed_df.columns
+                    
+                    # Get total rows after processing
+                    total_rows = processed_df.count()
+                    
+                    if not headers or not preview_data:
+                        missing_columns = []
+                        required_columns = ['description', 'code', 'code_type', 'payer_name', 'plan_name', 
+                                         'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                                         'standard_charge_min', 'standard_charge_max']
                         
-                        total_count = type_stats["total_count"]
-                        cpt_count = type_stats["cpt_count"]
+                        for col in required_columns:
+                            if col not in headers:
+                                missing_columns.append(col)
                         
-                        logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
-                        
-                        if cpt_count > 0:
-                            code_type_col = type_col
-                            # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                            col_num = type_col.split('|')[1]
-                            # Construct the corresponding code column name
-                            potential_code_col = f"code|{col_num}"
-                            
-                            if potential_code_col in df.columns:
-                                code_col = potential_code_col
-                                logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
-                                break
-                    
-                    if not code_type_col or not code_col:
-                        error_msg = "No code column with CPT type found in any of the code type columns"
-                        logger.error(error_msg)
-                        logger.error("Available columns: " + ", ".join(df.columns))
-                        raise ValueError(error_msg)
-                    
-                    # Filter for CPT rows - strictly only CPT values, case-insensitive
-                    df_cpt = df.filter(trim(upper(df[code_type_col])) == "CPT")
-                    
-                    # Log the count of filtered rows
-                    cpt_count = df_cpt.count()
-                    logger.info(f"Found {cpt_count} rows with CPT code type")
-                    
-                    if cpt_count == 0:
-                        error_msg = "No rows found with CPT code type"
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    
-                    # Get exactly 5 preview rows from CPT filtered data
-                    df_preview = df_cpt.limit(5)
-                    
-                    # Verify we got exactly 5 rows
-                    preview_count = df_preview.count()
-                    if preview_count < 5:
-                        logger.warning(f"Only found {preview_count} CPT rows for preview (less than requested 5)")
-                    
-                    # Find standard charge columns and extract payer/plan info
-                    standard_charge_columns = {
-                        'gross': None,
-                        'min': None,
-                        'max': None
-                    }
-                    
-                    # Dictionary to store payer and plan names from column names
-                    payer_plan_info = {}
-                    
-                    # Look for standard charge columns with different patterns
-                    for col_name in df.columns:
-                        col_lower = col_name.lower()
-                        if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
-                            # Extract payer and plan names from negotiated_dollar columns
-                            if 'negotiated_dollar' in col_lower:
-                                parts = col_name.split('|')
-                                if len(parts) >= 4:  # standard_charge|x|y|negotiated_dollar
-                                    payer_name = parts[1]
-                                    plan_name = parts[2]
-                                    payer_plan_info[col_name] = {
-                                        'payer_name': payer_name,
-                                        'plan_name': plan_name
-                                    }
-                                standard_charge_columns['negotiated_dollar'] = col_name
-                            elif 'gross' in col_lower:
-                                standard_charge_columns['gross'] = col_name
-                            elif 'min' in col_lower:
-                                standard_charge_columns['min'] = col_name
-                            elif 'max' in col_lower:
-                                standard_charge_columns['max'] = col_name
-                    
-                    logger.info(f"Found standard charge columns: {standard_charge_columns}")
-                    logger.info(f"Extracted payer/plan info: {payer_plan_info}")
-                    
-                    if not standard_charge_columns['negotiated_dollar']:
-                        raise ValueError("No negotiated dollar columns found in the CSV file")
-                    
-                    # Create preview data with actual values
-                    preview_rows = []
-                    for row in df_preview.collect():
-                        row_dict = row.asDict()
-                        for type_col in code_type_columns:
-                            if row_dict.get(type_col):
-                                # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                                col_num = type_col.split('|')[1]
-                                code_col = f"code|{col_num}"
-                                
-                                if code_col in row_dict:
-                                    # Get actual values from the row
-                                    preview_row = {
-                                        'description': row_dict.get('description', ''),
-                                        'code': row_dict.get(code_col, ''),
-                                        'code_type': row_dict.get(type_col, ''),
-                                    }
-                                    
-                                    # Add charge values and extract payer/plan info
-                                    if standard_charge_columns['negotiated_dollar']:
-                                        negotiated_col = standard_charge_columns['negotiated_dollar']
-                                        preview_row['standard_charge_negotiated_dollar'] = row_dict.get(negotiated_col, '')
-                                        # Get payer and plan names from the column name
-                                        if negotiated_col in payer_plan_info:
-                                            preview_row['payer_name'] = payer_plan_info[negotiated_col]['payer_name']
-                                            preview_row['plan_name'] = payer_plan_info[negotiated_col]['plan_name']
-                                    
-                                    if standard_charge_columns['gross']:
-                                        preview_row['standard_charge_gross'] = row_dict.get(standard_charge_columns['gross'], '')
-                                    if standard_charge_columns['min']:
-                                        preview_row['standard_charge_min'] = row_dict.get(standard_charge_columns['min'], '')
-                                    if standard_charge_columns['max']:
-                                        preview_row['standard_charge_max'] = row_dict.get(standard_charge_columns['max'], '')
-                                    
-                                    preview_rows.append(preview_row)
-                    
-                    if not preview_rows:
-                        raise ValueError("No valid records found after processing")
-                    
-                    # Get the processed columns
-                    processed_columns = [
-                        'description', 'code', 'code_type', 'payer_name', 'plan_name',
-                        'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                        'standard_charge_min', 'standard_charge_max'
-                    ]
+                        return jsonify({
+                            'success': False,
+                            'error': 'Missing required columns',
+                            'details': 'The file is missing some required columns',
+                            'technical_details': 'Data processing resulted in empty DataFrame',
+                            'available_columns': list(df.columns),
+                            'missing_columns': missing_columns,
+                            'total_rows': total_rows
+                        }), 400
                     
                     return jsonify({
                         'success': True,
-                        'headers': processed_columns,
-                        'preview_data': preview_rows,
+                        'headers': headers,
+                        'preview_data': preview_data,
                         'total_rows': total_rows,
                         'original_columns': list(df.columns),
-                        'processed_columns': processed_columns
+                        'processed_columns': list(headers)
                     })
                     
                 except Exception as e:
