@@ -1925,9 +1925,10 @@ def log_error():
                 'error': 'No hospital information found in session'
             }), 400
         
-        # Get error message from request
+        # Get error message and source page from request
         data = request.get_json()
         error_message = data.get('error_message', 'Manual error logged by user')
+        source_page = data.get('source_page', 'unknown')
         
         # Create log entry
         log_data = {
@@ -1945,34 +1946,41 @@ def log_error():
             'processing_time': 0
         }
         
-        # Log to database and delete hospital address record
+        # Log to database
         conn = get_db_connection()
         try:
             # Log the error
             log_ingestion_details(conn, log_data)
             
-            # Delete the hospital address record
-            cur = conn.cursor()
-            try:
-                cur.execute("""
-                    DELETE FROM hospital_address 
-                    WHERE hospital_name = %s
-                """, (hospital_name,))
-                conn.commit()
-                logger.info(f"Successfully deleted hospital address record for: {hospital_name}")
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Error deleting hospital address record: {str(e)}")
-                logger.error(traceback.format_exc())
-                raise
-            finally:
-                if cur:
-                    cur.close()
-            
-            return jsonify({
-                'success': True,
-                'message': 'Error logged successfully and hospital address record deleted'
-            })
+            # Only delete hospital address record if error is from charges page
+            if source_page == 'charges':
+                # Delete the hospital address record
+                cur = conn.cursor()
+                try:
+                    cur.execute("""
+                        DELETE FROM hospital_address 
+                        WHERE hospital_name = %s
+                    """, (hospital_name,))
+                    conn.commit()
+                    logger.info(f"Successfully deleted hospital address record for: {hospital_name}")
+                except Exception as e:
+                    conn.rollback()
+                    logger.error(f"Error deleting hospital address record: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    raise
+                finally:
+                    if cur:
+                        cur.close()
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Error logged successfully and hospital address record deleted'
+                })
+            else:
+                return jsonify({
+                    'success': True,
+                    'message': 'Error logged successfully'
+                })
         finally:
             return_db_connection(conn)
             

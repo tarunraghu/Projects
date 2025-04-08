@@ -282,6 +282,16 @@
             transform: translateY(-1px);
         }
 
+        .button-error {
+            background-color: var(--error-color);
+            color: white;
+        }
+
+        .button-error:hover {
+            background-color: #dc2626;
+            transform: translateY(-1px);
+        }
+
         .button:disabled {
             background-color: #9ca3af;
             cursor: not-allowed;
@@ -489,7 +499,8 @@
         <!-- Button Container -->
         <div class="button-container">
             <button class="button button-secondary" onclick="window.location.href='/review-address'">Back to Review Address</button>
-            <button id="logErrorButton" class="button button-secondary" onclick="logError()">Log Error</button>
+            <button class="button button-secondary" onclick="window.location.href='/'">Back to Home Page</button>
+            <button id="logErrorButton" class="button button-error" onclick="logError()">Log Error</button>
             <button id="loadButton" class="button button-primary" onclick="loadChargesData()">Load Data</button>
         </div>
 
@@ -567,7 +578,8 @@
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    error_message: userErrorMessage
+                    error_message: userErrorMessage,
+                    source_page: 'charges'
                 })
             })
             .then(response => response.json())

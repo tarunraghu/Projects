@@ -248,6 +248,16 @@
             transform: translateY(-1px);
         }
 
+        .button-error {
+            background-color: var(--error-color);
+            color: white;
+        }
+
+        .button-error:hover {
+            background-color: #dc2626;
+            transform: translateY(-1px);
+        }
+
         .button:disabled {
             background-color: #9ca3af;
             cursor: not-allowed;
@@ -364,6 +374,7 @@
         <!-- Button Container -->
         <div class="button-container">
             <button class="button button-secondary" onclick="window.location.href='/'">Back to File Selection</button>
+            <button id="logErrorButton" class="button button-error" onclick="logError()">Log Error</button>
             <button class="button button-primary" onclick="loadAddressDataToDB()">Confirm & Load Address</button>
         </div>
 
@@ -402,6 +413,60 @@
             } else {
                 successDiv.style.display = 'none';
             }
+        }
+
+        function logError() {
+            const logErrorButton = document.getElementById('logErrorButton');
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+            
+            // Reset messages
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+            
+            // Disable button
+            logErrorButton.disabled = true;
+            logErrorButton.textContent = 'Logging...';
+            
+            // Prompt for error message
+            const userErrorMessage = prompt('Please enter an error message:', 'Manual error logged by user');
+            
+            if (userErrorMessage === null) {
+                // User cancelled
+                logErrorButton.disabled = false;
+                logErrorButton.textContent = 'Log Error';
+                return;
+            }
+            
+            // Log error
+            fetch('/log-error', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    error_message: userErrorMessage,
+                    source_page: 'address'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showSuccess('Error logged successfully.');
+                    // Redirect to home page after a delay
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
+                } else {
+                    throw new Error(data.error || 'Failed to log error');
+                }
+            })
+            .catch(error => {
+                errorMessage.textContent = error.message;
+                errorMessage.style.display = 'block';
+                logErrorButton.disabled = false;
+                logErrorButton.textContent = 'Log Error';
+            });
         }
 
         // Load address data when page loads
