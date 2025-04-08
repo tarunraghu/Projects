@@ -1500,52 +1500,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 
                 # Archive existing records
                 archive_query = """
-                WITH records_to_archive AS (
-                    SELECT 
-                        hospital_name, description, code, code_type,
-                        payer_name, plan_name,
-                        standard_charge_gross,
-                        standard_charge_negotiated_dollar,
-                        standard_charge_min,
-                        standard_charge_max,
-                        created_at
-                    FROM hospital_charges 
-                    WHERE hospital_name = %s AND is_active = TRUE
-                ),
-                archive_insert AS (
-                    INSERT INTO hospital_charges_archive (
-                        hospital_name, description, code, code_type,
-                        payer_name, plan_name,
-                        standard_charge_gross,
-                        standard_charge_negotiated_dollar,
-                        standard_charge_min,
-                        standard_charge_max,
-                        original_created_at,
-                        archive_reason
-                    )
-                    SELECT 
-                        hospital_name, description, code, code_type,
-                        payer_name, plan_name,
-                        standard_charge_gross,
-                        standard_charge_negotiated_dollar,
-                        standard_charge_min,
-                        standard_charge_max,
-                        created_at,
-                        'Replaced by new data upload'
-                    FROM records_to_archive
-                ),
-                deactivate_records AS (
-                    UPDATE hospital_charges 
-                    SET 
-                        is_active = FALSE,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE hospital_name = %s AND is_active = TRUE
-                    RETURNING 1
-                )
-                SELECT COUNT(*) FROM deactivate_records;
+                CALL public.archive_hospital_records(%s);
                 """
                 
                 # Execute archive query
+                cur.execute(archive_query, (hospital_name,))
                 cur.execute(archive_query, (hospital_name, hospital_name))
                 archived_count = cur.fetchone()[0]
                 
@@ -1663,6 +1622,28 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             conn = get_db_connection()
             try:
                 log_ingestion_details(conn, log_data)
+                
+                # Check if the ingestion was successful
+                if log_data['status'] == 'SUCCESS':
+                    logger.info(f"Ingestion successful for hospital: {hospital_name}. Keeping hospital address record.")
+                else:
+                    # If ingestion failed, delete the hospital address record
+                    logger.info(f"Ingestion failed for hospital: {hospital_name}. Deleting hospital address record.")
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("""
+                            DELETE FROM hospital_address 
+                            WHERE hospital_name = %s
+                        """, (hospital_name,))
+                        conn.commit()
+                        logger.info(f"Successfully deleted hospital address record for: {hospital_name}")
+                    except Exception as e:
+                        conn.rollback()
+                        logger.error(f"Error deleting hospital address record: {str(e)}")
+                        logger.error(traceback.format_exc())
+                    finally:
+                        if cur:
+                            cur.close()
             finally:
                 return_db_connection(conn)
             
@@ -1928,6 +1909,80 @@ def create_hospital_charges_type2_archive_table():
             cur.close()
         if conn:
             return_db_connection(conn)
+
+@app.route('/log-error', methods=['POST'])
+def log_error():
+    """Endpoint to log an error in the hospital_log table"""
+    try:
+        # Get data from session
+        hospital_name = session.get('address_data', {}).get('hospital_name')
+        user_name = session.get('user_name', 'system')
+        file_path = session.get('data_file', '')
+        
+        if not hospital_name:
+            return jsonify({
+                'success': False,
+                'error': 'No hospital information found in session'
+            }), 400
+        
+        # Get error message from request
+        data = request.get_json()
+        error_message = data.get('error_message', 'Manual error logged by user')
+        
+        # Create log entry
+        log_data = {
+            'hospital_name': hospital_name,
+            'user_name': user_name,
+            'ingestion_type': session.get('ingestion_strategy', 'unknown'),
+            'start_time': datetime.now(),
+            'end_time': datetime.now(),
+            'total_records': 0,
+            'unique_records': 0,
+            'archived_records': 0,
+            'status': 'FAILURE',
+            'error_message': error_message,
+            'file_path': file_path,
+            'processing_time': 0
+        }
+        
+        # Log to database and delete hospital address record
+        conn = get_db_connection()
+        try:
+            # Log the error
+            log_ingestion_details(conn, log_data)
+            
+            # Delete the hospital address record
+            cur = conn.cursor()
+            try:
+                cur.execute("""
+                    DELETE FROM hospital_address 
+                    WHERE hospital_name = %s
+                """, (hospital_name,))
+                conn.commit()
+                logger.info(f"Successfully deleted hospital address record for: {hospital_name}")
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error deleting hospital address record: {str(e)}")
+                logger.error(traceback.format_exc())
+                raise
+            finally:
+                if cur:
+                    cur.close()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Error logged successfully and hospital address record deleted'
+            })
+        finally:
+            return_db_connection(conn)
+            
+    except Exception as e:
+        logger.error(f"Error logging error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
