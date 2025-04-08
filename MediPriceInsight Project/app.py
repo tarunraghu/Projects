@@ -863,19 +863,12 @@ def submit_form():
                 session['address_file'] = address_file
                 session['data_file'] = data_file
                 
-                # Redirect based on ingestion strategy
-                if ingestion_strategy == 'type1':
-                    return jsonify({
-                        'success': True,
-                        'message': 'File processed successfully',
-                        'redirect': '/review-address'
-                    })
-                else:
-                    return jsonify({
-                        'success': True,
-                        'message': 'File processed successfully',
-                        'redirect': '/review-charges'
-                    })
+                # Always redirect to review-address first, regardless of ingestion strategy
+                return jsonify({
+                    'success': True,
+                    'message': 'File processed successfully',
+                    'redirect': '/review-address'
+                })
                 
             except Exception as e:
                 # Clean up uploaded file if there's an error
@@ -925,6 +918,12 @@ def review_charges():
     if not data_file:
         logger.error("No data file found in session")
         return redirect('/')
+    
+    # Check if address has been confirmed
+    address_confirmed = session.get('address_confirmed', False)
+    if not address_confirmed:
+        logger.error("Address not confirmed yet")
+        return redirect('/review-address')
         
     return render_template('review_charges.html')
 
@@ -1176,6 +1175,122 @@ def preview_data():
         spark = spark_manager.get_spark()
             
         try:
+            # For Type 2 ingestion, use a simpler preview approach
+            if ingestion_strategy == 'type2':
+                # Read just the first 5 rows for preview
+                df = spark.read \
+                    .option("header", "true") \
+                    .option("inferSchema", "false") \
+                    .option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .option("nullValue", "") \
+                    .option("nanValue", "0.0") \
+                    .option("multiLine", "true") \
+                    .option("quote", "\"") \
+                    .option("escape", "\"") \
+                    .option("encoding", "UTF-8") \
+                    .csv(data_file) \
+                    .limit(5)  # Limit to 5 rows for preview
+                
+                # Get total rows count from a separate count operation
+                total_rows = spark.read \
+                    .option("header", "true") \
+                    .csv(data_file) \
+                    .count()
+                
+                # Find code type columns that match the pattern code|x|type
+                code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+                logger.info(f"Found code type columns: {code_type_columns}")
+                
+                # Find standard charge columns and extract payer/plan info
+                standard_charge_columns = {
+                    'gross': None,
+                    'negotiated_dollar': None,
+                    'min': None,
+                    'max': None
+                }
+                
+                # Dictionary to store payer and plan names from column names
+                payer_plan_info = {}
+                
+                # Look for standard charge columns with different patterns
+                for col_name in df.columns:
+                    col_lower = col_name.lower()
+                    if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
+                        # Extract payer and plan names from negotiated_dollar columns
+                        if 'negotiated_dollar' in col_lower:
+                            parts = col_name.split('|')
+                            if len(parts) >= 4:  # standard_charge|x|y|negotiated_dollar
+                                payer_name = parts[1]
+                                plan_name = parts[2]
+                                payer_plan_info[col_name] = {
+                                    'payer_name': payer_name,
+                                    'plan_name': plan_name
+                                }
+                            standard_charge_columns['negotiated_dollar'] = col_name
+                        elif 'gross' in col_lower:
+                            standard_charge_columns['gross'] = col_name
+                        elif 'min' in col_lower:
+                            standard_charge_columns['min'] = col_name
+                        elif 'max' in col_lower:
+                            standard_charge_columns['max'] = col_name
+                
+                logger.info(f"Found standard charge columns: {standard_charge_columns}")
+                logger.info(f"Extracted payer/plan info: {payer_plan_info}")
+                
+                # Create preview data with actual values
+                preview_rows = []
+                for row in df.collect():
+                    row_dict = row.asDict()
+                    for type_col in code_type_columns:
+                        if row_dict.get(type_col):
+                            # Extract the number from the type column (e.g., 'code|3|type' -> '3')
+                            col_num = type_col.split('|')[1]
+                            code_col = f"code|{col_num}"
+                            
+                            if code_col in row_dict:
+                                # Get actual values from the row
+                                preview_row = {
+                                    'description': row_dict.get('description', ''),
+                                    'code': row_dict.get(code_col, ''),
+                                    'code_type': row_dict.get(type_col, ''),
+                                }
+                                
+                                # Add charge values and extract payer/plan info
+                                if standard_charge_columns['negotiated_dollar']:
+                                    negotiated_col = standard_charge_columns['negotiated_dollar']
+                                    preview_row['standard_charge_negotiated_dollar'] = row_dict.get(negotiated_col, '')
+                                    # Get payer and plan names from the column name
+                                    if negotiated_col in payer_plan_info:
+                                        preview_row['payer_name'] = payer_plan_info[negotiated_col]['payer_name']
+                                        preview_row['plan_name'] = payer_plan_info[negotiated_col]['plan_name']
+                                
+                                if standard_charge_columns['gross']:
+                                    preview_row['standard_charge_gross'] = row_dict.get(standard_charge_columns['gross'], '')
+                                if standard_charge_columns['min']:
+                                    preview_row['standard_charge_min'] = row_dict.get(standard_charge_columns['min'], '')
+                                if standard_charge_columns['max']:
+                                    preview_row['standard_charge_max'] = row_dict.get(standard_charge_columns['max'], '')
+                                
+                                preview_rows.append(preview_row)
+                
+                # Get the processed columns
+                processed_columns = [
+                    'description', 'code', 'code_type', 'payer_name', 'plan_name',
+                    'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                    'standard_charge_min', 'standard_charge_max'
+                ]
+                
+                return jsonify({
+                    'success': True,
+                    'headers': processed_columns,
+                    'preview_data': preview_rows,
+                    'total_rows': total_rows,
+                    'original_columns': list(df.columns),
+                    'processed_columns': processed_columns
+                })
+            
+            # For Type 1 ingestion, continue with existing logic
             # First read the file to understand its structure
             with open(data_file, 'r', encoding='utf-8') as f:
                 # Read first few lines for analysis
@@ -1358,9 +1473,13 @@ def load_address_data_route():
         # Load the address data
         load_address_data(address_data)
         
+        # Set address_confirmed flag in session
+        session['address_confirmed'] = True
+        
         return jsonify({
             'success': True,
-            'message': f'Successfully loaded address data for hospital: {address_data["hospital_name"]}'
+            'message': f'Successfully loaded address data for hospital: {address_data["hospital_name"]}',
+            'redirect': '/review-charges'  # Add redirect URL to response
         })
         
     except Exception as e:
@@ -1909,6 +2028,32 @@ def create_hospital_charges_type2_archive_table():
             cur.close()
         if conn:
             return_db_connection(conn)
+
+@app.route('/confirm-address', methods=['POST'])
+def confirm_address():
+    try:
+        # Get data from session
+        data_file = session.get('data_file')
+        if not data_file:
+            logger.error("No data file found in session")
+            return jsonify({'error': 'No data file found'}), 400
+            
+        # Set address_confirmed flag in session
+        session['address_confirmed'] = True
+        
+        # Process the data file
+        logger.info(f"Processing data file: {data_file}")
+        result = process_file(data_file)
+        
+        if result.get('error'):
+            logger.error(f"Error processing file: {result['error']}")
+            return jsonify(result), 400
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error in confirm_address: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/log-error', methods=['POST'])
 def log_error():
