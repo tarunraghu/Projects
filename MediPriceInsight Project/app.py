@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session, render_template, redirect, url_for
+from flask import Flask, request, jsonify, session, render_template, redirect, url_for, send_file
 from flask_cors import CORS
 import logging
 import psycopg2
@@ -10,7 +10,7 @@ import os
 import traceback
 import csv
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType
 import pandas as pd
 from sqlalchemy import create_engine, text
 import threading
@@ -22,6 +22,10 @@ from io import StringIO
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
 import re
+import shutil
+import stat
+import uuid
+import gzip
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -30,12 +34,20 @@ CORS(app)  # Enable CORS for all routes
 app.secret_key = 'your-secret-key-here'  # Replace with a secure secret key in production
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configure other loggers to be less verbose
+logging.getLogger("py4j").setLevel(logging.WARNING)
+logging.getLogger("pyspark").setLevel(logging.WARNING)
 
 # Global task queue and results
 task_queue = queue.Queue()
 task_results = {}
+
+# Add these at the top with other global variables
+dump_progress = {}
+dump_status = {}
 
 class BackgroundTask:
     def __init__(self, task_id, status='PENDING', progress=0, message=''):
@@ -1789,6 +1801,16 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             final_seconds = int(processing_time % 60)
             final_elapsed_str = f"{final_minutes}m {final_seconds}s"
             
+            # Archive any remaining inactive records
+            try:
+                inactive_archived = archive_inactive_records()
+                if inactive_archived > 0:
+                    task.message += f'\nArchived {inactive_archived:,} additional inactive records'
+            except Exception as e:
+                logger.error(f"Error during final inactive records archival: {str(e)}")
+                logger.error(traceback.format_exc())
+                # Don't raise the error as the main ingestion was successful
+            
             # Final progress update
             task.progress = 100
             task.message = (
@@ -2254,5 +2276,469 @@ def archive_hospital_records(hospital_name):
         if conn:
             return_db_connection(conn)
 
+@app.route('/dump-data')
+def dump_data_page():
+    """Route to render the simplified data dump page"""
+    return render_template('dump_data.html')
+
+@app.route('/generate-dump/<table>', methods=['POST'])
+def generate_table_dump(table):
+    """Generate complete dump for the specified table, split into multiple files if needed"""
+    task_id = str(uuid.uuid4())
+    try:
+        # Validate table name
+        if table not in ['hospital_address', 'hospital_charges']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid table name'
+            }), 400
+        
+        # Initialize progress tracking
+        dump_progress[task_id] = 0
+        dump_status[task_id] = 'initializing'
+        
+        # Create downloads directory
+        downloads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
+        os.makedirs(downloads_dir, exist_ok=True)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base_filename = f"{table}_dump_{timestamp}"
+        filename = f"{base_filename}.csv"
+        filepath = os.path.join(downloads_dir, filename)
+            
+        # Update progress
+        dump_progress[task_id] = 10
+        dump_status[task_id] = 'querying_database'
+        
+        # Build query
+        query = f"SELECT * FROM {table}"
+        if table == 'hospital_charges':
+            query += " WHERE is_active = TRUE"
+        query += " ORDER BY id"
+        
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            
+            # Get column names once - these will be used as headers for all files
+            query = f"SELECT * FROM {table} LIMIT 0"  # Get column names without fetching data
+            cur.execute(query)
+            headers = [desc[0] for desc in cur.description]
+            logger.info(f"Headers for {table}: {headers}")
+            
+            # Get total count for progress calculation
+            count_query = f"SELECT COUNT(*) FROM {table}"
+            if table == 'hospital_charges':
+                count_query += " WHERE is_active = TRUE"
+            cur.execute(count_query)
+            total_rows = cur.fetchone()[0]
+            
+            # Build main query
+            query = f"SELECT * FROM {table}"
+            if table == 'hospital_charges':
+                query += " WHERE is_active = TRUE"
+            query += " ORDER BY id"
+            
+            # Execute main query
+            cur.execute(query)
+            
+            # Initialize file tracking
+            generated_files = []
+            total_rows_written = 0
+            current_file_number = 1
+            rows_per_file = 500000
+            num_files = (total_rows + rows_per_file - 1) // rows_per_file
+            
+            logger.info(f"Starting dump of {total_rows:,} rows, will create {num_files} files")
+            
+            # Write data in chunks across multiple files
+            while True:
+                # Create new file
+                if num_files > 1:
+                    filename = f"{base_filename}_part{current_file_number}.csv"
+                else:
+                    filename = f"{base_filename}.csv"
+                    
+                filepath = os.path.join(downloads_dir, filename)
+                rows_in_current_file = 0
+                
+                logger.info(f"Creating file {current_file_number}/{num_files}: {filename}")
+                
+                with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(headers)  # Write the same headers to each file
+                    
+                    # Write rows for this file
+                    while rows_in_current_file < rows_per_file:
+                        rows = cur.fetchmany(10000)  # Fetch in smaller chunks
+                        if not rows:
+                            break
+                            
+                        writer.writerows(rows)
+                        rows_written = len(rows)
+                        rows_in_current_file += rows_written
+                        total_rows_written += rows_written
+                        
+                        # Update progress
+                        if total_rows > 0:
+                            progress = min(90, 10 + (80 * total_rows_written / total_rows))
+                            dump_progress[task_id] = progress
+                            dump_status[task_id] = (
+                                f'Writing file {current_file_number} of {num_files} '
+                                f'({total_rows_written:,} of {total_rows:,} total rows)'
+                            )
+                
+                # Verify file was created with correct headers
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                    if first_line != ','.join(headers):
+                        raise ValueError(f"Header verification failed for file {filename}")
+                
+                # Record file information
+                file_size = os.path.getsize(filepath)
+                generated_files.append({
+                    'filename': filename,
+                    'size': file_size,
+                    'rows': rows_in_current_file + 1,  # +1 for header
+                    'path': filepath,
+                    'part': current_file_number if num_files > 1 else None
+                })
+                
+                logger.info(f"Completed file {filename} with {rows_in_current_file:,} rows")
+                
+                # Check if we've processed all rows
+                if not rows:
+                    break
+                    
+                current_file_number += 1
+            
+            # Store file information in session
+            session['download_files'] = generated_files
+            
+            # Update final progress
+            dump_progress[task_id] = 100
+            dump_status[task_id] = 'completed'
+            
+            return jsonify({
+                'success': True,
+                'task_id': task_id,
+                'message': (
+                    f'Successfully generated dump with {total_rows_written:,} rows '
+                    f'across {len(generated_files)} file(s)'
+                ),
+                'headers': headers  # Include headers in response for verification
+            })
+            
+        finally:
+            if cur:
+                cur.close()
+            if conn:
+                return_db_connection(conn)
+                
+    except Exception as e:
+        error_msg = f"Error generating dump: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        dump_status[task_id] = 'failed'
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 500
+
+@app.route('/get-hospitals')
+def get_hospitals():
+    """Get list of all hospitals from the database"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT DISTINCT hospital_name 
+            FROM hospital_address 
+            ORDER BY hospital_name
+        """)
+        
+        hospitals = [row[0] for row in cur.fetchall()]
+        
+        return jsonify({
+            'success': True,
+            'hospitals': hospitals
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting hospitals: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
+
+def configure_spark_session():
+    """Configure and create a Spark session with appropriate logging"""
+    try:
+        # Create builder with basic configs
+        builder = SparkSession.builder \
+            .appName("Data Dump Generation") \
+            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
+            .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+            .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+            .config("spark.driver.memory", "4g") \
+            .config("spark.executor.memory", "4g")
+        
+        # Create and configure the session
+        spark = builder.getOrCreate()
+        spark.sparkContext.setLogLevel("WARN")
+        
+        return spark
+    except Exception as e:
+        logger.error(f"Failed to configure Spark session: {str(e)}")
+        raise
+
+@app.route('/dump-progress/<task_id>')
+def get_dump_progress(task_id):
+    """Get the progress of a data dump operation"""
+    try:
+        if task_id not in dump_progress:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid task ID'
+            }), 404
+            
+        return jsonify({
+            'success': True,
+            'progress': dump_progress[task_id],
+            'status': dump_status[task_id]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting dump progress: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Download the generated CSV file"""
+    try:
+        filepath = session.get('download_file')
+        if not filepath:
+            logger.error("No file path found in session")
+            return jsonify({
+                'success': False,
+                'error': 'No file path found in session'
+            }), 404
+            
+        if not os.path.exists(filepath):
+            logger.error(f"File not found at path: {filepath}")
+            return jsonify({
+                'success': False,
+                'error': 'File not found'
+            }), 404
+            
+        logger.info(f"Serving file: {filepath}")
+        
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='text/csv'
+        )
+        
+    except Exception as e:
+        logger.error(f"Error downloading file: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# Add cleanup function at the start of the file, after imports
+def cleanup_old_temp_dirs():
+    """Clean up old temporary directories on startup"""
+    base_temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'spark_temp')
+    cleanup_file = os.path.join(base_temp_dir, 'cleanup.txt')
+    
+    if os.path.exists(cleanup_file):
+        try:
+            with open(cleanup_file, 'r') as f:
+                dirs_to_clean = f.readlines()
+            
+            # Remove the cleanup file first
+            os.remove(cleanup_file)
+            
+            # Try to clean up each directory
+            for dir_path in dirs_to_clean:
+                dir_path = dir_path.strip()
+                if os.path.exists(dir_path):
+                    try:
+                        shutil.rmtree(dir_path, ignore_errors=True)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up old temp directory {dir_path}: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Error during cleanup of old temp directories: {str(e)}")
+
+# At the top of the file, add this function
+def cleanup_spark_temp_dirs():
+    """Clean up Spark temporary directories"""
+    temp_dir = os.path.join(os.environ.get('TEMP', os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'Temp')))
+    try:
+        for item in os.listdir(temp_dir):
+            if item.startswith('spark-'):
+                spark_dir = os.path.join(temp_dir, item)
+                try:
+                    # Use a more robust cleanup approach for Windows
+                    def on_rm_error(func, path, exc_info):
+                        # Try changing permissions and try again
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    
+                    shutil.rmtree(spark_dir, onerror=on_rm_error)
+                    logger.info(f"Successfully cleaned up Spark temp directory: {spark_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up Spark temp directory {spark_dir}: {str(e)}")
+    except Exception as e:
+        logger.warning(f"Error during Spark temp directory cleanup: {str(e)}")
+
+# Add cleanup call at application startup
 if __name__ == '__main__':
+    cleanup_old_temp_dirs()
     app.run(debug=True)
+
+# Add this new route to get hospitals for the dropdown
+@app.route('/api/hospitals-list')
+def get_hospitals_list():
+    """Get list of all hospitals for dropdown"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Query to get hospitals with their record counts
+        query = """
+        SELECT 
+            ha.hospital_name,
+            COUNT(DISTINCT CASE WHEN hc.is_active = TRUE THEN hc.id END) as active_records
+        FROM 
+            hospital_address ha
+            LEFT JOIN hospital_charges hc ON ha.hospital_name = hc.hospital_name
+        GROUP BY 
+            ha.hospital_name
+        ORDER BY 
+            ha.hospital_name;
+        """
+        
+        cur.execute(query)
+        hospitals = [{"name": row[0], "record_count": row[1]} for row in cur.fetchall()]
+        
+        return jsonify({
+            'success': True,
+            'hospitals': hospitals
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching hospitals list: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
+
+def archive_inactive_records():
+    """Move all inactive records from hospital_charges to hospital_charges_archive"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Begin transaction
+        cur.execute("BEGIN;")
+        
+        # Get count of records to be archived
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM hospital_charges 
+            WHERE is_active = FALSE;
+        """)
+        
+        count = cur.fetchone()[0]
+        
+        if count > 0:
+            # Archive inactive records
+            cur.execute("""
+                INSERT INTO hospital_charges_archive (
+                    hospital_name, description, code, code_type, 
+                    payer_name, plan_name, standard_charge_gross,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, original_created_at, archive_reason
+                )
+                SELECT 
+                    hospital_name, description, code, code_type,
+                    payer_name, plan_name, standard_charge_gross,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, created_at, 'Inactive record cleanup'
+                FROM hospital_charges
+                WHERE is_active = FALSE;
+            """)
+            
+            # Delete the archived records from the main table
+            cur.execute("""
+                DELETE FROM hospital_charges 
+                WHERE is_active = FALSE;
+            """)
+            
+            # Commit transaction
+            conn.commit()
+            
+            logger.info(f"Successfully archived {count} inactive records")
+            return count
+        else:
+            # Commit transaction even if no records to archive
+            conn.commit()
+            logger.info("No inactive records found to archive")
+            return 0
+            
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Error archiving inactive records: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
+
+@app.route('/archive-inactive', methods=['POST'])
+def archive_inactive_records_route():
+    """Endpoint to trigger archiving of inactive records"""
+    try:
+        archived_count = archive_inactive_records()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully archived {archived_count} inactive records'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in archive_inactive_records_route: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
