@@ -1706,15 +1706,31 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.progress = 10
         task.message = 'Archiving existing records...'
         
-        # Archive existing records
+        # Archive existing records using stored procedure
+        conn = get_db_connection()
         try:
-            archived_count = archive_hospital_records(hospital_name)
+            cur = conn.cursor()
+            # Start a new transaction
+            cur.execute("BEGIN;")
+            # Call the stored procedure
+            cur.execute("CALL archive_hospital_records(%s)", (hospital_name,))
+            # Commit the transaction
+            cur.execute("COMMIT;")
+            archived_count = cur.rowcount
             log_data['archived_records'] = archived_count
             task.message = f'Archived {archived_count:,} existing records'
         except Exception as e:
+            # Rollback on error
+            if conn:
+                conn.rollback()
             logger.error(f"Error during hospital data archival: {str(e)}")
             logger.error(traceback.format_exc())
             raise
+        finally:
+            if cur:
+                cur.close()
+            if conn:
+                return_db_connection(conn)
 
         task.progress = 20
         task.message = 'Reading and processing data file...'
@@ -1801,15 +1817,31 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             final_seconds = int(processing_time % 60)
             final_elapsed_str = f"{final_minutes}m {final_seconds}s"
             
-            # Archive any remaining inactive records
+            # Archive any remaining inactive records using stored procedure
             try:
-                inactive_archived = archive_inactive_records()
+                conn = get_db_connection()
+                cur = conn.cursor()
+                # Start a new transaction
+                cur.execute("BEGIN;")
+                # Call the stored procedure
+                cur.execute("CALL archive_hospital_records(NULL)")
+                # Commit the transaction
+                cur.execute("COMMIT;")
+                inactive_archived = cur.rowcount
                 if inactive_archived > 0:
                     task.message += f'\nArchived {inactive_archived:,} additional inactive records'
             except Exception as e:
+                # Rollback on error
+                if conn:
+                    conn.rollback()
                 logger.error(f"Error during final inactive records archival: {str(e)}")
                 logger.error(traceback.format_exc())
                 # Don't raise the error as the main ingestion was successful
+            finally:
+                if cur:
+                    cur.close()
+                if conn:
+                    return_db_connection(conn)
             
             # Final progress update
             task.progress = 100
