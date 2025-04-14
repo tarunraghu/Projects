@@ -26,6 +26,9 @@ import shutil
 import stat
 import uuid
 import gzip
+from werkzeug.utils import secure_filename
+from json_processor import JSONProcessor
+from json_type3_processor import process_hospital_charges_type3
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -471,36 +474,22 @@ def load_hospital_data(file_path):
 def validate_file_path(file_path):
     """Validate and normalize file path"""
     try:
-        # Remove any quotes and normalize slashes
-        file_path = file_path.strip().strip('"').strip("'").replace('\\', '/')
+        # Normalize the path
+        normalized_path = os.path.normpath(file_path)
         
-        # Convert to absolute path
-        abs_path = os.path.abspath(file_path)
+        # Check if path is absolute
+        if not os.path.isabs(normalized_path):
+            # Make path absolute relative to the application root
+            app_root = os.path.dirname(os.path.abspath(__file__))
+            normalized_path = os.path.join(app_root, normalized_path)
         
-        # Normalize path
-        normalized_path = os.path.normpath(abs_path)
-        
-        logger.info(f"Original path: {file_path}")
-        logger.info(f"Absolute path: {abs_path}")
-        logger.info(f"Normalized path: {normalized_path}")
-        
-        # Check if file exists
-        if not os.path.exists(normalized_path):
-            raise ValueError(f"File not found: {normalized_path}")
-        
-        # Check if it's a file (not a directory)
-        if not os.path.isfile(normalized_path):
-            raise ValueError(f"Path is not a file: {normalized_path}")
-        
-        # Check if file is readable
-        if not os.access(normalized_path, os.R_OK):
-            raise ValueError(f"File is not readable: {normalized_path}")
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(normalized_path), exist_ok=True)
         
         return normalized_path
-        
     except Exception as e:
-        logger.error(f"Error validating file path: {str(e)}")
-        raise ValueError(f"Invalid file path: {str(e)}")
+        logging.error(f"Error validating file path: {str(e)}")
+        raise
 
 def detect_file_encoding(file_path):
     """Detect the file encoding by trying different common encodings"""
@@ -949,103 +938,64 @@ def index():
 
 @app.route('/submit-form', methods=['POST'])
 def submit_form():
-    """Handle form submission and validate file"""
     try:
-        # Check if file was uploaded
         if 'file' not in request.files:
-            return jsonify({
-                'success': False,
-                'error': 'No file uploaded'
-            }), 400
+            return jsonify({'error': 'No file uploaded'}), 400
             
         file = request.files['file']
         if file.filename == '':
-            return jsonify({
-                'success': False,
-                'error': 'No file selected'
-            }), 400
+            return jsonify({'error': 'No file selected'}), 400
             
         # Get form data
-        user_name = request.form.get('userName')
-        file_type = request.form.get('fileType')
-        ingestion_strategy = request.form.get('ingestionStrategy')
+        user_name = request.form.get('userName', 'system')
+        file_type = request.form.get('fileType', '')
+        ingestion_strategy = request.form.get('ingestionStrategy', '')
         
-        # Validate required fields
+        # Validate form data
         if not all([user_name, file_type, ingestion_strategy]):
-            return jsonify({
-                'success': False,
-                'error': 'Missing required fields'
-            }), 400
+            return jsonify({'error': 'Missing required form data'}), 400
             
-        # Validate ingestion strategy
-        if ingestion_strategy not in ['type1', 'type2']:
-            return jsonify({
-                'success': False,
-                'error': f'Invalid ingestion strategy: {ingestion_strategy}'
-            }), 400
-            
-        # Validate file type
-        if file_type not in ['csv', 'json']:
-            return jsonify({
-                'success': False,
-                'error': f'Unsupported file type: {file_type}'
-            }), 400
-            
-        # Create upload directory if it doesn't exist
-        upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
-        os.makedirs(upload_dir, exist_ok=True)
+        # Create uploads directory with proper path handling
+        upload_dir = validate_file_path('uploads')
         
-        # Save the uploaded file
-        file_path = os.path.join(upload_dir, file.filename)
+        # Generate a safe filename
+        safe_filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_filename = f"{timestamp}_{safe_filename}"
+        file_path = os.path.join(upload_dir, unique_filename)
+        
+        # Save the file
         file.save(file_path)
         
-        logger.info(f"File saved to: {file_path}")
+        # Get hospital name from filename
+        hospital_name = os.path.splitext(safe_filename)[0]
         
-        # Split the file if it's a CSV
-        if file_type == 'csv':
-            try:
-                address_file, data_file = split_csv_file(file_path, ingestion_strategy)
-                logger.info("Files split successfully")
-                
-                # Read the address file
-                address_data = read_address_file(address_file)
-                
-                # Store file information in session
-                session['file_path'] = file_path
-                session['user_name'] = user_name
-                session['file_type'] = file_type
-                session['ingestion_strategy'] = ingestion_strategy
-                session['address_data'] = address_data
-                session['address_file'] = address_file
-                session['data_file'] = data_file
-                
-                # Always redirect to review-address first, regardless of ingestion strategy
-                return jsonify({
-                    'success': True,
-                    'message': 'File processed successfully',
-                    'redirect': '/review-address'
-                })
-                
-            except Exception as e:
-                # Clean up uploaded file if there's an error
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                return jsonify({
-                    'success': False,
-                    'error': f'Error processing file: {str(e)}'
-                }), 400
+        # Create task ID
+        task_id = str(int(time.time()))
+        
+        # Process based on ingestion strategy
+        if ingestion_strategy == 'type3':
+            result = process_hospital_charges_type3(file_path, hospital_name, task_id, user_name, ingestion_strategy)
+            if isinstance(result, tuple) and len(result) == 2 and result[1] == 400:
+                return result
+        else:
+            result = process_hospital_charges(file_path, hospital_name, task_id, user_name, ingestion_strategy)
+            if isinstance(result, tuple) and len(result) == 2 and result[1] == 400:
+                return result
         
         return jsonify({
-            'success': False,
-            'error': 'Only CSV files are supported at this time'
-        }), 400
+            'success': True,
+            'redirect': url_for('review_address')
+        })
             
     except Exception as e:
-        logger.error(f"Error processing form submission: {str(e)}")
-        logger.error(traceback.format_exc())
+        logging.error(f"Error in submit_form: {str(e)}")
         return jsonify({
-            'success': False,
-            'error': str(e)
+            'error': 'Error processing file',
+            'details': {
+                'validation_errors': [str(e)],
+                'available_fields': []
+            }
         }), 500
 
 @app.route('/review-address')
@@ -1803,9 +1753,16 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             progress_increment = 35 / total_chunks  # Remaining 35% (60-95) divided by chunks
             
             def update_progress(chunk_num):
-                progress = min(95, 60 + int(chunk_num * progress_increment))
-                task.progress = progress
-                task.message = f'Loading data: {progress}% complete (chunk {chunk_num + 1}/{total_chunks})'
+                """Update progress for the current task"""
+                try:
+                    task = task_results.get(task_id)
+                    if task:
+                        progress = min(95, int((chunk_num + 1) * 100 / total_chunks))
+                        task.progress = progress
+                        task.message = f'Processing data: {progress}% complete (chunk {chunk_num + 1}/{total_chunks})'
+                except Exception as e:
+                    logger.error(f"Error updating progress: {str(e)}")
+                    logger.error(traceback.format_exc())
             
             process_chunks(processed_df, chunk_size, update_progress)
             
@@ -2774,3 +2731,74 @@ def archive_inactive_records_route():
             'success': False,
             'error': str(e)
         }), 500
+
+def process_hospital_charges_type3(data_file, hospital_name, task_id, user_name='system', ingestion_type='type3', chunk_size=50000):
+    """Process Type 3 JSON file for hospital charges"""
+    processor = None
+    try:
+        # Ensure the file exists and is accessible
+        if not os.path.exists(data_file):
+            return jsonify({
+                'error': 'File not found',
+                'details': {
+                    'validation_errors': [f"File not found: {data_file}"],
+                    'available_fields': []
+                }
+            }), 400
+            
+        # Initialize JSON processor
+        processor = JSONProcessor()
+        
+        # Create output directory
+        output_dir = os.path.join(os.path.dirname(data_file), 'processed')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Process the JSON file
+        hospital_info_csv, charges_csv = processor.process_json_file(data_file, output_dir)
+        
+        # Update task progress
+        task = task_results.get(task_id)
+        if task:
+            task.progress = 100
+            task.message = 'JSON file processed successfully'
+            task.status = 'SUCCESS'
+        
+        return jsonify({
+            'success': True,
+            'message': 'File processed successfully',
+            'hospital_info_csv': hospital_info_csv,
+            'charges_csv': charges_csv
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing JSON file: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Update task status
+        task = task_results.get(task_id)
+        if task:
+            task.status = 'FAILURE'
+            task.error = str(e)
+        
+        return jsonify({
+            'error': 'Error processing JSON file',
+            'details': {
+                'validation_errors': [str(e)],
+                'available_fields': []
+            }
+        }), 400
+    finally:
+        if processor:
+            processor.stop_spark()
+
+def update_progress(chunk_num):
+    """Update progress for the current task"""
+    try:
+        task = task_results.get(task_id)
+        if task:
+            progress = min(95, int((chunk_num + 1) * 100 / total_chunks))
+            task.progress = progress
+            task.message = f'Processing data: {progress}% complete (chunk {chunk_num + 1}/{total_chunks})'
+    except Exception as e:
+        logger.error(f"Error updating progress: {str(e)}")
+        logger.error(traceback.format_exc())

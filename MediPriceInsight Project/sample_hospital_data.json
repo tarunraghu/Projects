@@ -1,0 +1,44 @@
+{
+    "hospital_info": {
+        "name": "Memorial Regional Hospital",
+        "last_updated_on": "2024-03-20",
+        "version": "1.0",
+        "location": "Jacksonville, FL",
+        "address": "567 Healthcare Boulevard, Jacksonville, FL 32256"
+    },
+    "charges": [
+        {
+            "description": "Initial Hospital Visit, Low Complexity",
+            "code": "99221",
+            "code_type": "CPT",
+            "payer_name": "Blue Cross Blue Shield",
+            "plan_name": "PPO Standard",
+            "gross_charge": 1250.00,
+            "negotiated_charge": 950.00,
+            "min_charge": 850.00,
+            "max_charge": 1450.00
+        },
+        {
+            "description": "Chest X-Ray, Single View",
+            "code": "71045",
+            "code_type": "CPT",
+            "payer_name": "Aetna",
+            "plan_name": "HMO Basic",
+            "gross_charge": 350.00,
+            "negotiated_charge": 275.00,
+            "min_charge": 225.00,
+            "max_charge": 400.00
+        },
+        {
+            "description": "Basic Metabolic Panel",
+            "code": "80048",
+            "code_type": "CPT",
+            "payer_name": "UnitedHealthcare",
+            "plan_name": "Medicare Advantage",
+            "gross_charge": 120.00,
+            "negotiated_charge": 95.00,
+            "min_charge": 85.00,
+            "max_charge": 150.00
+        }
+    ]
+} 

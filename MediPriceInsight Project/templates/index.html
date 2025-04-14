@@ -407,10 +407,11 @@
                 
                 <div class="form-group">
                     <label for="ingestionStrategy">Ingestion Strategy</label>
-                    <select id="ingestionStrategy" name="ingestionStrategy" required>
-                        <option value="">Select strategy</option>
-                        <option value="type1">Type 1 - CSV Direct Ingestion</option>
-                        <option value="type2">Type 2 - CSV Pivot Ingestion</option>
+                    <select id="ingestionStrategy" name="ingestionStrategy" class="form-control" required>
+                        <option value="">Select Ingestion Strategy</option>
+                        <option value="type1">Type 1 - Standard CSV Ingestion</option>
+                        <option value="type2">Type 2 - Advanced CSV Ingestion</option>
+                        <option value="type3">Type 3 - JSON Direct Ingestion</option>
                     </select>
                     <div id="strategyError" class="field-error">Please select an ingestion strategy</div>
                 </div>
@@ -447,14 +448,126 @@
             document.getElementById('spinner').style.display = 'none';
         }
 
-        function showError(message) {
+        function showError(message, details = null) {
             const errorDiv = document.getElementById('errorMessage');
-            if (message) {
-                errorDiv.textContent = message;
-                errorDiv.style.display = 'block';
-            } else {
-                errorDiv.style.display = 'none';
+            errorDiv.innerHTML = ''; // Clear previous content
+            
+            // Create error message container
+            const errorContent = document.createElement('div');
+            errorContent.innerHTML = `
+                <h4 class="alert-heading">Error Details:</h4>
+                <p>${message || 'An error occurred during file processing'}</p>
+            `;
+            
+            // Add validation details if available
+            if (details) {
+                try {
+                    const errorDetails = typeof details === 'string' ? JSON.parse(details) : details;
+                    const ingestionType = document.getElementById('ingestionStrategy').value;
+                    
+                    // For Type 3 (JSON) validation errors
+                    if (ingestionType === 'type3') {
+                        // Show validation errors if present
+                        if (errorDetails.validation_errors) {
+                            const validationDiv = document.createElement('div');
+                            validationDiv.className = 'validation-results mt-3';
+                            validationDiv.innerHTML = `
+                                <strong>JSON Structure Validation:</strong>
+                                <ul class="text-danger">
+                                    ${errorDetails.validation_errors.map(error => 
+                                        `<li>${error}</li>`
+                                    ).join('')}
+                                </ul>
+                            `;
+                            errorContent.appendChild(validationDiv);
+                        }
+                        
+                        // Show available fields if present
+                        if (errorDetails.available_fields) {
+                            const availableDiv = document.createElement('div');
+                            availableDiv.className = 'validation-results mt-3';
+                            availableDiv.innerHTML = `
+                                <strong>Available Fields in Your JSON:</strong>
+                                <ul class="text-info">
+                                    ${errorDetails.available_fields.map(field => 
+                                        `<li>${field}</li>`
+                                    ).join('')}
+                                </ul>
+                            `;
+                            errorContent.appendChild(availableDiv);
+                        }
+                        
+                        // Show expected structure
+                        if (!errorDetails.validation_errors && !errorDetails.available_fields) {
+                            const structureDiv = document.createElement('div');
+                            structureDiv.className = 'validation-results mt-3';
+                            structureDiv.innerHTML = `
+                                <strong>Expected JSON Structure:</strong>
+                                <pre class="bg-light p-2 mt-2">
+{
+    "hospital_name": "Hospital Name",
+    "last_updated": "YYYY-MM-DD",
+    "standard_charges": [
+        {
+            "description": "Service Description",
+            "code": "Service Code",
+            "code_type": "Code Type",
+            "payer_name": "Payer Name",
+            "plan_name": "Plan Name",
+            "standard_charge_gross": 100.00,
+            "standard_charge_negotiated_dollar": 80.00,
+            "standard_charge_min": 70.00,
+            "standard_charge_max": 90.00
+        }
+    ]
+}</pre>
+                            `;
+                            errorContent.appendChild(structureDiv);
+                        }
+                    }
+                    
+                    // For Type 1 and Type 2 (CSV) validation errors
+                    if ((ingestionType === 'type1' || ingestionType === 'type2') && errorDetails.missing_columns) {
+                        const fieldsDiv = document.createElement('div');
+                        fieldsDiv.className = 'validation-results mt-3';
+                        fieldsDiv.innerHTML = `
+                            <strong>Missing Required Columns:</strong>
+                            <ul class="text-danger">
+                                ${errorDetails.missing_columns.map(field => 
+                                    `<li>${field}</li>`
+                                ).join('')}
+                            </ul>
+                        `;
+                        errorContent.appendChild(fieldsDiv);
+                        
+                        if (errorDetails.available_columns) {
+                            const availableDiv = document.createElement('div');
+                            availableDiv.className = 'validation-results mt-3';
+                            availableDiv.innerHTML = `
+                                <strong>Available Columns in Your File:</strong>
+                                <ul class="text-info">
+                                    ${errorDetails.available_columns.map(field => 
+                                        `<li>${field}</li>`
+                                    ).join('')}
+                                </ul>
+                            `;
+                            errorContent.appendChild(availableDiv);
+                        }
+                    }
+                    
+                } catch (e) {
+                    console.error('Error parsing details:', e);
+                    // If parsing fails, show raw details
+                    const rawDiv = document.createElement('div');
+                    rawDiv.className = 'validation-results mt-3';
+                    rawDiv.innerHTML = `<pre class="text-danger">${details}</pre>`;
+                    errorContent.appendChild(rawDiv);
+                }
             }
+            
+            errorDiv.appendChild(errorContent);
+            errorDiv.style.display = 'block';
+            hideSpinner();
         }
 
         function showSuccess(message) {
@@ -532,13 +645,11 @@
                 if (result.success) {
                     window.location.href = result.redirect;
                 } else {
-                    showError(result.error || 'Failed to process file');
+                    showError(result.error || 'Failed to process file', result.details);
                 }
             } catch (error) {
                 console.error('Error:', error);
                 showError('Error uploading file. Please try again.');
-            } finally {
-                hideSpinner();
             }
 
             return false;
