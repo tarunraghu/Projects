@@ -6,6 +6,7 @@ from psycopg2 import pool
 import json
 from datetime import datetime
 from ingestion_strategies.type1_strategy import Type1IngestionStrategy
+from ingestion_strategies.type3_strategy import Type3IngestionStrategy
 import os
 import traceback
 import csv
@@ -651,296 +652,54 @@ def read_data_file_preview(file_path, num_rows=5):
 def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
-        from pyspark.sql.functions import round as spark_round, col, trim, upper, count, when, lit, split, element_at, explode, array, struct, expr, regexp_replace
-        
         if ingestion_strategy == 'type2':
-            # Log all columns for debugging
-            logger.info(f"Available columns: {df.columns}")
-            
-            # Find all code type columns that match the pattern code|x|type
-            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
-            logger.info(f"Found code type columns: {code_type_columns}")
-            
-            # Initialize variables for code and code_type
-            code_type_col = None
-            code_col = None
-            
-            # Try to find CPT values in each code type column
-            for type_col in code_type_columns:
-                # Get total count and CPT count for the column
-                type_stats = df.agg(
-                    count(col(type_col)).alias("total_count"),
-                    count(when(trim(upper(col(type_col))).like("%CPT%"), True)).alias("cpt_count")
-                ).collect()[0]
-                
-                total_count = type_stats["total_count"]
-                cpt_count = type_stats["cpt_count"]
-                
-                logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
-                
-                if cpt_count > 0:
-                    code_type_col = type_col
-                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                    col_num = type_col.split('|')[1]
-                    # Construct the corresponding code column name
-                    potential_code_col = f"code|{col_num}"
-                    
-                    if potential_code_col in df.columns:
-                        code_col = potential_code_col
-                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
-                        break
-            
-            if not code_type_col or not code_col:
-                error_msg = "No code column with CPT type found in any of the code type columns"
-                logger.error(error_msg)
-                logger.error("Available columns: " + ", ".join(df.columns))
-                raise ValueError(error_msg)
-            
-            # Find standard charge columns
-            standard_charge_columns = {
-                'gross': None,
-                'min': None,
-                'max': None
-            }
-            
-            # Find all negotiated dollar columns and other related columns
-            negotiated_dollar_columns = []
-            negotiated_algorithm_columns = []
-            estimated_amount_columns = []
-            
-            # Look for standard charge columns with different patterns
-            for col_name in df.columns:
-                col_lower = col_name.lower()
-                if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
-                    if 'gross' in col_lower:
-                        standard_charge_columns['gross'] = col_name
-                    elif 'negotiated_dollar' in col_lower:
-                        negotiated_dollar_columns.append(col_name)
-                    elif 'negotiated_algorithm' in col_lower:
-                        negotiated_algorithm_columns.append(col_name)
-                    elif 'min' in col_lower:
-                        standard_charge_columns['min'] = col_name
-                    elif 'max' in col_lower:
-                        standard_charge_columns['max'] = col_name
-                elif 'estimated_amount' in col_lower:
-                    estimated_amount_columns.append(col_name)
-            
-            logger.info(f"Found standard charge columns: {standard_charge_columns}")
-            logger.info(f"Found negotiated dollar columns: {negotiated_dollar_columns}")
-            
-            # Create a new DataFrame with only CPT rows
-            df_cpt = df.filter(trim(upper(col(code_type_col))).like("%CPT%"))
-            
-            # Log the count of filtered rows
-            cpt_count = df_cpt.count()
-            logger.info(f"Found {cpt_count} rows with CPT code type")
-            
-            if cpt_count == 0:
-                error_msg = "No rows found with CPT code type"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # First select all necessary columns
-            df_with_columns = df_cpt.select(
-                'description',
-                code_col,
-                code_type_col,
-                standard_charge_columns['gross'],
-                standard_charge_columns['min'],
-                standard_charge_columns['max'],
-                *negotiated_dollar_columns,  # Include all negotiated dollar columns
-                *negotiated_algorithm_columns,  # Include all negotiated algorithm columns
-                *estimated_amount_columns  # Include all estimated amount columns
-            )
-
-            # Create structs for negotiated dollar columns
-            negotiated_structs = []
-            for col_name in negotiated_dollar_columns:
-                parts = col_name.split('|')
-                if len(parts) >= 4:  # standard_charge|payer|plan|negotiated_dollar
-                    payer = parts[1]
-                    plan = parts[2]
-                    
-                    # Find corresponding columns for this payer/plan combination
-                    base_payer_plan = f"{parts[0]}|{payer}|{plan}"
-                    
-                    # Get corresponding columns
-                    negotiated_algorithm = next((c for c in negotiated_algorithm_columns if c.startswith(base_payer_plan)), None)
-                    estimated_amount = next((c for c in estimated_amount_columns if c.startswith(base_payer_plan)), None)
-                    
-                    # Create struct with all related columns
-                    negotiated_structs.append(
-                        struct(
-                            lit(payer).alias("payer_name"),
-                            lit(plan).alias("plan_name"),
-                            col(col_name).cast('decimal(20,2)').alias("standard_charge_negotiated_dollar"),
-                            col(negotiated_algorithm).alias("standard_charge_negotiated_algorithm") if negotiated_algorithm else lit(None).alias("standard_charge_negotiated_algorithm"),
-                            col(estimated_amount).cast('decimal(20,2)').alias("estimated_amount") if estimated_amount else lit(None).cast('decimal(20,2)').alias("estimated_amount")
-                        )
-                    )
-            
-            # Create the array of structs and explode
-            if negotiated_structs:
-                # Create the array of structs
-                df_exploded = df_with_columns.withColumn(
-                    "negotiated_info",
-                    explode(array(*negotiated_structs))
-                )
+            # Type 2 specific processing
+            pass
+        elif ingestion_strategy == 'type3':
+            strategy = Type3IngestionStrategy()
+            # If df is a PySpark DataFrame, convert to Pandas first
+            if hasattr(df, 'toPandas'):
+                df = df.toPandas()
+            # If df is a Pandas DataFrame, save it to a temporary file first
+            if isinstance(df, pd.DataFrame):
+                # Create a temporary file
+                temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_file = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}.csv")
+                df.to_csv(temp_file, index=False)
+                try:
+                    return strategy.process_csv(temp_file)
+                finally:
+                    # Clean up the temporary file
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
             else:
-                # If no negotiated dollar columns found, create empty structs
-                df_exploded = df_with_columns.withColumn("negotiated_info", 
-                    explode(array(struct(
-                        lit("").alias("payer_name"),
-                        lit("").alias("plan_name"),
-                        lit(0.0).cast('decimal(20,2)').alias("standard_charge_negotiated_dollar"),
-                        lit(None).alias("standard_charge_negotiated_algorithm"),
-                        lit(None).cast('decimal(20,2)').alias("estimated_amount")
-                    ))))
-            
-            # Select final columns
-            df_final = df_exploded.select(
-                col("description"),
-                col(code_col).alias("code"),
-                col(code_type_col).alias("code_type"),
-                col("negotiated_info.payer_name"),
-                col("negotiated_info.plan_name"),
-                col(standard_charge_columns['gross']).alias("standard_charge_gross"),
-                col("negotiated_info.standard_charge_negotiated_dollar"),
-                col(standard_charge_columns['min']).alias("standard_charge_min"),
-                col(standard_charge_columns['max']).alias("standard_charge_max")
-            )
-            
-            # Round numeric columns to 2 decimal places
-            numeric_columns = [
-                'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                'standard_charge_min', 'standard_charge_max'
-            ]
-            
-            for numeric_col in numeric_columns:
-                if numeric_col in df_final.columns:
-                    df_final = df_final.withColumn(numeric_col, spark_round(col(numeric_col).cast('decimal(20,2)'), 2))
-            
-            return df_final
-            
+                # If df is a file path, process it directly
+                return strategy.process_csv(df)
         else:
-            # Original Type 1 processing logic
-            # Log all columns for debugging
-            logger.info(f"Available columns: {df.columns}")
-            
-            # Find all code type columns that match the pattern code|x|type
-            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
-            logger.info(f"Found code type columns: {code_type_columns}")
-            
-            # Initialize variables for code and code_type
-            code_type_col = None
-            code_col = None
-            
-            # Try to find CPT values in each code type column
-            for type_col in code_type_columns:
-                # Get total count and CPT count for the column
-                type_stats = df.agg(
-                    count(col(type_col)).alias("total_count"),
-                    count(when(trim(upper(col(type_col))).like("%CPT%"), True)).alias("cpt_count")
-                ).collect()[0]
-                
-                total_count = type_stats["total_count"]
-                cpt_count = type_stats["cpt_count"]
-                
-                logger.info(f"Column {type_col} - Total rows: {total_count}, CPT rows: {cpt_count}")
-                
-                if cpt_count > 0:
-                    code_type_col = type_col
-                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                    col_num = type_col.split('|')[1]
-                    # Construct the corresponding code column name
-                    potential_code_col = f"code|{col_num}"
-                    
-                    if potential_code_col in df.columns:
-                        code_col = potential_code_col
-                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
-                        break
-            
-            if not code_type_col or not code_col:
-                error_msg = "No code column with CPT type found in any of the code type columns"
-                logger.error(error_msg)
-                logger.error("Available columns: " + ", ".join(df.columns))
-                raise ValueError(error_msg)
-            
-            # Find standard charge columns
-            standard_charge_columns = {
-                'gross': None,
-                'negotiated_dollar': None,
-                'min': None,
-                'max': None
-            }
-            
-            # Look for standard charge columns with different patterns
-            for col_name in df.columns:
-                col_lower = col_name.lower()
-                if ('standard' in col_lower and 'charge' in col_lower) or ('gross' in col_lower and 'charge' in col_lower):
-                    if 'gross' in col_lower:
-                        standard_charge_columns['gross'] = col_name
-                    elif 'negotiated_dollar' in col_lower:
-                        standard_charge_columns['negotiated_dollar'] = col_name
-                    elif 'min' in col_lower:
-                        standard_charge_columns['min'] = col_name
-                    elif 'max' in col_lower:
-                        standard_charge_columns['max'] = col_name
-            
-            logger.info(f"Found standard charge columns: {standard_charge_columns}")
-            
-            # Create a new DataFrame with only CPT rows
-            df_cpt = df.filter(trim(upper(col(code_type_col))).like("%CPT%"))
-            
-            # Log the count of filtered rows
-            cpt_count = df_cpt.count()
-            logger.info(f"Found {cpt_count} rows with CPT code type")
-            
-            if cpt_count == 0:
-                error_msg = "No rows found with CPT code type"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Map the columns to the required schema
-            column_mapping = {
-                'description': 'description',
-                code_col: 'code',
-                code_type_col: 'code_type',
-                'payer_name': 'payer_name',
-                'plan_name': 'plan_name',
-                standard_charge_columns['gross']: 'standard_charge_gross',
-                standard_charge_columns['negotiated_dollar']: 'standard_charge_negotiated_dollar',
-                standard_charge_columns['min']: 'standard_charge_min',
-                standard_charge_columns['max']: 'standard_charge_max'
-            }
-            
-            # Remove None values from mapping
-            column_mapping = {k: v for k, v in column_mapping.items() if k is not None}
-            
-            logger.info(f"Column mapping: {column_mapping}")
-            
-            # Create a new DataFrame with renamed columns
-            select_exprs = []
-            for old_col, new_col in column_mapping.items():
-                select_exprs.append(col(old_col).alias(new_col))
-            
-            df_cpt = df_cpt.select(*select_exprs)
-            
-            # Round numeric columns to 2 decimal places
-            numeric_columns = [
-                'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                'standard_charge_min', 'standard_charge_max'
-            ]
-            
-            for numeric_col in numeric_columns:
-                if numeric_col in df_cpt.columns:
-                    df_cpt = df_cpt.withColumn(numeric_col, spark_round(col(numeric_col).cast('decimal(20,2)'), 2))
-            
-            return df_cpt
-            
+            # Default to Type 1
+            strategy = Type1IngestionStrategy()
+            # If df is a PySpark DataFrame, convert to Pandas first
+            if hasattr(df, 'toPandas'):
+                df = df.toPandas()
+            # If df is a Pandas DataFrame, save it to a temporary file first
+            if isinstance(df, pd.DataFrame):
+                # Create a temporary file
+                temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_file = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}.csv")
+                df.to_csv(temp_file, index=False)
+                try:
+                    return strategy.process_csv(temp_file)
+                finally:
+                    # Clean up the temporary file
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+            else:
+                # If df is a file path, process it directly
+                return strategy.process_csv(df)
     except Exception as e:
         logger.error(f"Error processing hospital data: {str(e)}")
-        logger.error(traceback.format_exc())
         raise
 
 @app.route('/')
@@ -978,7 +737,7 @@ def submit_form():
             }), 400
             
         # Validate ingestion strategy
-        if ingestion_strategy not in ['type1', 'type2']:
+        if ingestion_strategy not in ['type1', 'type2', 'type3']:
             return jsonify({
                 'success': False,
                 'error': f'Invalid ingestion strategy: {ingestion_strategy}'
@@ -1034,11 +793,42 @@ def submit_form():
                     'success': False,
                     'error': f'Error processing file: {str(e)}'
                 }), 400
-        
-        return jsonify({
-            'success': False,
-            'error': 'Only CSV files are supported at this time'
-        }), 400
+        elif file_type == 'json' and ingestion_strategy == 'type3':
+            try:
+                # Initialize Type 3 strategy
+                strategy = Type3IngestionStrategy()
+                
+                # Process JSON file
+                address_df, hospital_df = strategy.read_json(file_path)
+                
+                # Store file information in session
+                session['file_path'] = file_path
+                session['user_name'] = user_name
+                session['file_type'] = file_type
+                session['ingestion_strategy'] = ingestion_strategy
+                session['address_data'] = address_df.to_dict('records')[0]
+                session['address_file'] = os.path.join(os.path.dirname(file_path), f"{os.path.splitext(os.path.basename(file_path))[0]}_address.csv")
+                session['data_file'] = os.path.join(os.path.dirname(file_path), f"{os.path.splitext(os.path.basename(file_path))[0]}_data.csv")
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'File processed successfully',
+                    'redirect': '/review-address'
+                })
+                
+            except Exception as e:
+                # Clean up uploaded file if there's an error
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                return jsonify({
+                    'success': False,
+                    'error': f'Error processing JSON file: {str(e)}'
+                }), 400
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Only CSV files are supported for Type 1 and Type 2 strategies. For Type 3, both CSV and JSON files are supported.'
+            }), 400
             
     except Exception as e:
         logger.error(f"Error processing form submission: {str(e)}")
@@ -1417,129 +1207,136 @@ def preview_data():
                         'total_rows': 0
                     }), 400
             
-            # For Type 1 ingestion, continue with existing logic
-            # First read the file to understand its structure
-            with open(data_file, 'r', encoding='utf-8') as f:
-                # Read first few lines for analysis
-                header_line = f.readline().strip()
-                headers = [h.strip() for h in header_line.split(',')]
-                logger.info(f"CSV Headers: {headers}")
-                
-                # Read a few data rows for analysis
-                data_rows = []
-                for _ in range(5):
-                    line = f.readline()
-                    if line:
-                        data_rows.append([cell.strip() for cell in line.split(',')])
-                
-                logger.info(f"Sample data rows: {data_rows}")
-            
-            # Read the CSV file without enforcing schema initially
-            logger.info(f"Reading file: {data_file}")
-            df = spark.read \
-                .option("header", "true") \
-                .option("inferSchema", "false") \
-                .option("mode", "PERMISSIVE") \
-                .option("columnNameOfCorruptRecord", "_corrupt_record") \
-                .option("nullValue", "") \
-                .option("nanValue", "0.0") \
-                .option("multiLine", "true") \
-                .option("quote", "\"") \
-                .option("escape", "\"") \
-                .option("encoding", "UTF-8") \
-                .csv(data_file)
-            
-            # Log the columns and sample data
-            logger.info(f"DataFrame columns: {df.columns}")
-            logger.info("Sample data from DataFrame:")
-            df.show(5, truncate=False)
-            
-            # Log distinct values in code_type column if it exists
-            if 'code_type' in df.columns:
-                distinct_types = df.select('code_type').distinct().collect()
-                logger.info(f"Distinct values in code_type column: {[row['code_type'] for row in distinct_types if row['code_type']]}")
-            
-            # Check for columns matching code|x|type pattern
-            code_type_columns = [col for col in df.columns if '|type' in col.lower()]
-            if code_type_columns:
-                logger.info(f"Found code type columns: {code_type_columns}")
-                for col in code_type_columns:
-                    distinct_values = df.select(col).distinct().collect()
-                    logger.info(f"Distinct values in {col}: {[row[col] for row in distinct_values if row[col]]}")
-            
-            try:
-                processed_df = process_hospital_data(df, ingestion_strategy, spark)
-                processed_columns = processed_df.columns
-                logger.info(f"Processed columns: {processed_columns}")
-                
-                # Convert to Pandas and handle NaN values
-                pandas_df = processed_df.limit(5).toPandas()
-                
-                # Replace NaN values with None for JSON serialization
-                preview_data = pandas_df.where(pandas_df.notna(), None).to_dict('records')
-                
-                # Get column headers
-                headers = processed_df.columns
-                
-                # Get total rows
-                total_rows = processed_df.count()
-                
-                if not headers or not preview_data:
-                    missing_columns = []
-                    if ingestion_strategy == 'type2':
-                        required_columns = ['description', 'code', 'payer_name', 'plan_name', 
-                                         'standard_charge_gross', 'standard_charge_negotiated_dollar']
-                    else:
-                        required_columns = ['description', 'code', 'payer_name', 'plan_name', 
-                                         'standard_charge_gross', 'standard_charge_negotiated_dollar',
-                                         'standard_charge_min', 'standard_charge_max']
+            # For Type 1 and Type 3 ingestion
+            else:
+                # First read the file to understand its structure
+                with open(data_file, 'r', encoding='utf-8') as f:
+                    # Read first few lines for analysis
+                    header_line = f.readline().strip()
+                    headers = [h.strip() for h in header_line.split(',')]
+                    logger.info(f"CSV Headers: {headers}")
                     
-                    for col in required_columns:
-                        if col not in headers:
-                            missing_columns.append(col)
+                    # Read a few data rows for analysis
+                    data_rows = []
+                    for _ in range(5):
+                        line = f.readline()
+                        if line:
+                            data_rows.append([cell.strip() for cell in line.split(',')])
+                    
+                    logger.info(f"Sample data rows: {data_rows}")
+                
+                # Read the CSV file without enforcing schema initially
+                logger.info(f"Reading file: {data_file}")
+                df = spark.read \
+                    .option("header", "true") \
+                    .option("inferSchema", "false") \
+                    .option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .option("nullValue", "") \
+                    .option("nanValue", "0.0") \
+                    .option("multiLine", "true") \
+                    .option("quote", "\"") \
+                    .option("escape", "\"") \
+                    .option("encoding", "UTF-8") \
+                    .csv(data_file)
+                
+                # Log the columns and sample data
+                logger.info(f"DataFrame columns: {df.columns}")
+                logger.info("Sample data from DataFrame:")
+                df.show(5, truncate=False)
+                
+                # Log distinct values in code_type column if it exists
+                if 'code_type' in df.columns:
+                    distinct_types = df.select('code_type').distinct().collect()
+                    logger.info(f"Distinct values in code_type column: {[row['code_type'] for row in distinct_types if row['code_type']]}")
+                
+                # Check for columns matching code|x|type pattern
+                code_type_columns = [col for col in df.columns if '|type' in col.lower()]
+                if code_type_columns:
+                    logger.info(f"Found code type columns: {code_type_columns}")
+                    for col in code_type_columns:
+                        distinct_values = df.select(col).distinct().collect()
+                        logger.info(f"Distinct values in {col}: {[row[col] for row in distinct_values if row[col]]}")
+                
+                try:
+                    processed_df = process_hospital_data(df, ingestion_strategy, spark)
+                    
+                    # Handle tuple of DataFrames for Type 3
+                    if ingestion_strategy == 'type3':
+                        address_df, hospital_df = processed_df
+                        processed_df = hospital_df  # Use the hospital charges DataFrame for preview
+                    
+                    processed_columns = processed_df.columns
+                    logger.info(f"Processed columns: {processed_columns}")
+                    
+                    # Convert to Pandas and handle NaN values
+                    pandas_df = processed_df.limit(5).toPandas()
+                    
+                    # Replace NaN values with None for JSON serialization
+                    preview_data = pandas_df.where(pandas_df.notna(), None).to_dict('records')
+                    
+                    # Get column headers
+                    headers = processed_df.columns
+                    
+                    # Get total rows
+                    total_rows = processed_df.count()
+                    
+                    if not headers or not preview_data:
+                        missing_columns = []
+                        if ingestion_strategy == 'type2':
+                            required_columns = ['description', 'code', 'payer_name', 'plan_name', 
+                                             'standard_charge_gross', 'standard_charge_negotiated_dollar']
+                        else:
+                            required_columns = ['description', 'code', 'payer_name', 'plan_name', 
+                                             'standard_charge_gross', 'standard_charge_negotiated_dollar',
+                                             'standard_charge_min', 'standard_charge_max']
+                        
+                        for col in required_columns:
+                            if col not in headers:
+                                missing_columns.append(col)
+                        
+                        return jsonify({
+                            'success': False,
+                            'error': 'Missing required columns',
+                            'details': 'The file is missing some required columns',
+                            'technical_details': 'Data processing resulted in empty DataFrame',
+                            'available_columns': list(df.columns),
+                            'missing_columns': missing_columns,
+                            'total_rows': total_rows
+                        }), 400
+                    
+                    return jsonify({
+                        'success': True,
+                        'headers': headers,
+                        'preview_data': preview_data,
+                        'total_rows': total_rows,
+                        'original_columns': list(df.columns),
+                        'processed_columns': list(processed_columns)
+                    })
+                    
+                except Exception as process_error:
+                    logger.error(f"Error processing data: {str(process_error)}")
+                    logger.error(traceback.format_exc())
+                    
+                    # Get more information about the data structure
+                    column_info = {}
+                    for column in df.columns:
+                        try:
+                            distinct_values = df.select(column).distinct().limit(10).collect()
+                            column_info[column] = [str(row[column]) for row in distinct_values if row[column] is not None]
+                        except Exception as e:
+                            column_info[column] = f"Error getting values: {str(e)}"
                     
                     return jsonify({
                         'success': False,
-                        'error': 'Missing required columns',
-                        'details': 'The file is missing some required columns',
-                        'technical_details': 'Data processing resulted in empty DataFrame',
-                        'available_columns': list(df.columns),
-                        'missing_columns': missing_columns,
-                        'total_rows': total_rows
-                    }), 400
-                
-                return jsonify({
-                    'success': True,
-                    'headers': headers,
-                    'preview_data': preview_data,
-                    'total_rows': total_rows,
-                    'original_columns': list(df.columns),
-                    'processed_columns': list(processed_columns)
-                })
-                
-            except Exception as process_error:
-                logger.error(f"Error processing data: {str(process_error)}")
-                logger.error(traceback.format_exc())
-                
-                # Get more information about the data structure
-                column_info = {}
-                for column in df.columns:
-                    try:
-                        distinct_values = df.select(column).distinct().limit(10).collect()
-                        column_info[column] = [str(row[column]) for row in distinct_values if row[column] is not None]
-                    except Exception as e:
-                        column_info[column] = f"Error getting values: {str(e)}"
-                
-                return jsonify({
-                    'success': False,
-                    'error': 'Error processing data',
-                    'details': str(process_error),
-                    'technical_details': {
-                        'traceback': traceback.format_exc(),
-                        'available_columns': list(df.columns),
-                        'column_sample_values': column_info
-                    }
-                }), 500
+                        'error': 'Error processing data',
+                        'details': str(process_error),
+                        'technical_details': {
+                            'traceback': traceback.format_exc(),
+                            'available_columns': list(df.columns),
+                            'column_sample_values': column_info
+                        }
+                    }), 500
             
         except Exception as spark_error:
             error_msg = str(spark_error)
@@ -1775,6 +1572,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             
             if processed_df is None:
                 raise ValueError("Failed to process hospital data: Processed DataFrame is None")
+            
+            # Handle tuple of DataFrames for Type 3
+            if ingestion_type == 'type3':
+                address_df, hospital_df = processed_df
+                processed_df = hospital_df  # Use the hospital charges DataFrame
             
             # Add hospital name and timestamps
             processed_df = processed_df.withColumn('hospital_name', lit(hospital_name))
