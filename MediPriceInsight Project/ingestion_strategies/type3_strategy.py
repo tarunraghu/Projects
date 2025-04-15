@@ -55,12 +55,31 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
                 # Process address data (first row)
                 address_row = all_rows[0][:5]  # First row as data, first 5 columns
                 
-                # Create pandas DataFrame for address data
+                # Process hospital_location to handle array format
+                hospital_location = address_row[3].strip() if len(address_row) > 3 else ''
+                
+                # For CSV processing, use the hospital name as location if location is empty or not provided
+                if not hospital_location or hospital_location.strip('[]"\' ') == '':
+                    hospital_location = address_row[0].strip() if len(address_row) > 0 else ''
+                    logger.info(f"Using hospital name as location: {hospital_location}")
+                else:
+                    try:
+                        # Try to parse as JSON if it's in array format
+                        location_data = json.loads(hospital_location)
+                        if isinstance(location_data, list) and len(location_data) > 0:
+                            hospital_location = str(location_data[0])
+                    except (json.JSONDecodeError, TypeError):
+                        # If JSON parsing fails, try to clean up the string
+                        hospital_location = hospital_location.strip('[]"\' ')
+
+                logger.info(f"Raw hospital_location from CSV: {address_row[3]}")
+                logger.info(f"Processed hospital_location: {hospital_location}")
+
                 address_data = [{
                     'hospital_name': address_row[0].strip() if len(address_row) > 0 else '',
                     'last_updated_on': address_row[1].strip() if len(address_row) > 1 else '',
                     'version': address_row[2].strip() if len(address_row) > 2 else '',
-                    'hospital_location': address_row[3].strip() if len(address_row) > 3 else '',
+                    'hospital_location': hospital_location,
                     'hospital_address': address_row[4].strip() if len(address_row) > 4 else ''
                 }]
                 address_df = pd.DataFrame(address_data)
@@ -69,7 +88,22 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
                 with open(address_file, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow(['hospital_name', 'last_updated_on', 'version', 'hospital_location', 'hospital_address'])
-                    writer.writerow(address_row)
+                    row_to_write = [
+                        address_data[0]['hospital_name'],
+                        address_data[0]['last_updated_on'],
+                        address_data[0]['version'],
+                        address_data[0]['hospital_location'],
+                        address_data[0]['hospital_address']
+                    ]
+                    logger.info(f"Writing row to CSV: {row_to_write}")  # Add logging
+                    writer.writerow(row_to_write)
+                
+                logger.info(f"Verifying written data - reading back from {address_file}")
+                with open(address_file, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    next(reader)  # Skip header
+                    first_row = next(reader)
+                    logger.info(f"Read back from CSV - hospital_location: {first_row[3]}")
                 
                 # Verify address file was created
                 if not os.path.exists(address_file):
@@ -180,23 +214,39 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
             logger.info("Successfully parsed JSON data")
             
             # Extract address data with safe navigation
+            hospital_name = str(data.get('hospital_name', ''))
             address_data = {
-                'hospital_name': str(data.get('hospital_name', '')),
+                'hospital_name': hospital_name,
                 'last_updated_on': str(data.get('last_updated_on', '')),
                 'version': str(data.get('version', '')),
-                'hospital_location': '',  # Default empty string
+                'hospital_location': hospital_name,  # Use hospital name as location
                 'hospital_address': str(data.get('hospital_address', ''))
             }
             
             # Safely extract hospital location
             hospital_location = data.get('hospital_location', None)
             if isinstance(hospital_location, list) and len(hospital_location) > 0:
-                if isinstance(hospital_location[0], dict):
-                    address_data['hospital_location'] = str(hospital_location[0].get('address', ''))
+                if isinstance(hospital_location[0], str):
+                    address_data['hospital_location'] = hospital_location[0]
+                elif isinstance(hospital_location[0], dict):
+                    # Try different possible keys that might contain the location
+                    loc = hospital_location[0].get('location', '')
+                    if not loc:
+                        loc = hospital_location[0].get('name', '')
+                    if not loc:
+                        loc = hospital_location[0].get('value', '')
+                    if loc:
+                        address_data['hospital_location'] = str(loc)
             elif isinstance(hospital_location, dict):
-                address_data['hospital_location'] = str(hospital_location.get('address', ''))
-            elif isinstance(hospital_location, str):
-                address_data['hospital_location'] = str(hospital_location)
+                loc = hospital_location.get('location', '')
+                if not loc:
+                    loc = hospital_location.get('name', '')
+                if not loc:
+                    loc = hospital_location.get('value', '')
+                if loc:
+                    address_data['hospital_location'] = str(loc)
+            
+            logger.info(f"Processed hospital location from JSON: {address_data['hospital_location']}")
             
             # Create address DataFrame and save to CSV
             address_df = pd.DataFrame([address_data])
@@ -212,40 +262,108 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
             # Transform the data to flatten nested structures
             flattened_charges = []
             for charge in standard_charge_info:
-                code_info = charge.get('code_information', [{}])[0] if charge.get('code_information') else {}
+                # Get all code information entries
+                code_information = charge.get('code_information', [])
                 standard_charges = charge.get('standard_charges', [])
+                description = str(charge.get('description', ''))
                 
-                flat_charge = {
-                    'description': str(charge.get('description', '')),
-                    'code': str(code_info.get('code', '')),
-                    'code_type': str(code_info.get('type', '')),
-                    'payer_name': str(charge.get('payer_name', '')),
-                    'plan_name': str(charge.get('plan_name', '')),
-                    'standard_charge_gross': None,
-                    'standard_charge_negotiated_dollar': None,
-                    'standard_charge_min': None,
-                    'standard_charge_max': None
-                }
+                # If no code information, create one record with empty code info
+                if not code_information:
+                    code_information = [{}]
                 
-                # Process standard charges
-                for std_charge in standard_charges:
-                    charge_type = std_charge.get('type', '')
-                    amount = std_charge.get('amount')
-                    try:
-                        amount = float(amount) if amount is not None else None
-                    except (ValueError, TypeError):
-                        amount = None
+                # Create a record for each code
+                for code_info in code_information:
+                    # Base charge info with specific code
+                    base_charge = {
+                        'description': description,
+                        'code': str(code_info.get('code', '')),
+                        'code_type': str(code_info.get('type', '')),
+                        'payer_name': '',  # Default empty
+                        'plan_name': '',   # Default empty
+                        'standard_charge_gross': None,
+                        'standard_charge_negotiated_dollar': None,
+                        'standard_charge_min': None,
+                        'standard_charge_max': None
+                    }
+
+                    # Process each standard charge entry
+                    for std_charge in standard_charges:
+                        flat_charge = base_charge.copy()  # Create a copy of base charge with the code info
                         
-                    if charge_type == 'gross_charge':
-                        flat_charge['standard_charge_gross'] = amount
-                    elif charge_type == 'discounted_cash':
-                        flat_charge['standard_charge_negotiated_dollar'] = amount
-                    elif charge_type == 'minimum':
-                        flat_charge['standard_charge_min'] = amount
-                    elif charge_type == 'maximum':
-                        flat_charge['standard_charge_max'] = amount
-                
-                flattened_charges.append(flat_charge)
+                        # Only try to get payer info if payers_information exists
+                        if std_charge.get('payers_information'):
+                            payers_info = std_charge['payers_information']
+                            # Handle both single dict and list of dicts
+                            if isinstance(payers_info, list) and payers_info:
+                                payer = payers_info[0]  # Take first payer if it's a list
+                            else:
+                                payer = payers_info
+                            
+                            if isinstance(payer, dict):
+                                flat_charge['payer_name'] = str(payer.get('payer_name', ''))
+                                flat_charge['plan_name'] = str(payer.get('plan_name', ''))
+                        
+                        # Process standard charges
+                        charge_type = std_charge.get('type', '')
+                        amount = std_charge.get('amount')
+
+                        # Check for direct gross_charge field
+                        gross_charge = std_charge.get('gross_charge')
+                        if gross_charge is not None:
+                            try:
+                                flat_charge['standard_charge_gross'] = float(gross_charge)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid gross_charge value: {gross_charge}")
+                                flat_charge['standard_charge_gross'] = None
+
+                        # Check for discounted_cash field
+                        discounted_cash = std_charge.get('discounted_cash')
+                        if discounted_cash is not None:
+                            try:
+                                flat_charge['standard_charge_negotiated_dollar'] = float(discounted_cash)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid discounted_cash value: {discounted_cash}")
+                                flat_charge['standard_charge_negotiated_dollar'] = None
+
+                        # Check for direct minimum field
+                        minimum = std_charge.get('minimum')
+                        if minimum is not None:
+                            try:
+                                flat_charge['standard_charge_min'] = float(minimum)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid minimum value: {minimum}")
+                                flat_charge['standard_charge_min'] = None
+
+                        # Check for direct maximum field
+                        maximum = std_charge.get('maximum')
+                        if maximum is not None:
+                            try:
+                                flat_charge['standard_charge_max'] = float(maximum)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid maximum value: {maximum}")
+                                flat_charge['standard_charge_max'] = None
+
+                        # Process other charge types if they exist
+                        try:
+                            amount = float(amount) if amount is not None else None
+                        except (ValueError, TypeError):
+                            amount = None
+                            
+                        if charge_type == 'gross_charge':
+                            flat_charge['standard_charge_gross'] = amount
+                        elif charge_type == 'discounted_cash':
+                            flat_charge['standard_charge_negotiated_dollar'] = amount
+                        elif charge_type == 'minimum':
+                            flat_charge['standard_charge_min'] = amount
+                        elif charge_type == 'maximum':
+                            flat_charge['standard_charge_max'] = amount
+                        
+                        logger.info(f"Processed charge - Description: {description}, "
+                                  f"Gross: {flat_charge['standard_charge_gross']}, "
+                                  f"Min: {flat_charge['standard_charge_min']}, "
+                                  f"Max: {flat_charge['standard_charge_max']}")
+                        
+                        flattened_charges.append(flat_charge)
             
             if not flattened_charges:
                 logger.warning("No charge data found after processing")
