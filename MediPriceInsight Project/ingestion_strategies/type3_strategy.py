@@ -273,11 +273,16 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
                 
                 # Create a record for each code
                 for code_info in code_information:
+                    # Only process if code type is CPT
+                    code_type = str(code_info.get('type', '')).upper()  # Convert to uppercase for case-insensitive comparison
+                    if code_type != 'CPT':
+                        continue  # Skip non-CPT codes
+                    
                     # Base charge info with specific code
                     base_charge = {
                         'description': description,
                         'code': str(code_info.get('code', '')),
-                        'code_type': str(code_info.get('type', '')),
+                        'code_type': code_type,
                         'payer_name': '',  # Default empty
                         'plan_name': '',   # Default empty
                         'standard_charge_gross': None,
