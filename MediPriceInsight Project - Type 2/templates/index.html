@@ -227,31 +227,12 @@
 
         .button-container {
             margin-top: 20px;
+            text-align: center;
         }
 
-        .button-container .btn-submit:first-child {
-            float: left;
-        }
-
-        .ignore-link {
+        .button-container .btn-submit {
+            margin: 0 auto;
             display: block;
-            clear: both;
-            margin-top: 20px;
-            padding-top: 15px;
-            text-decoration: none;
-            color: #9147ff;
-            font-size: 14px;
-            transition: all 0.3s ease;
-        }
-
-        .ignore-link:hover {
-            color: #7e3bd6;
-            text-decoration: underline;
-        }
-
-        .ignore-link i {
-            margin-right: 8px;
-            font-size: 12px;
         }
 
         .btn-submit {
@@ -396,37 +377,25 @@
                 </div>
                 
                 <div class="form-group">
-                    <label for="fileType">File Type</label>
-                    <select id="fileType" name="fileType" required>
-                        <option value="">Select file type</option>
-                        <option value="csv">CSV</option>
-                        <option value="json">JSON</option>
-                    </select>
-                    <div id="fileTypeError" class="field-error">Please select a file type</div>
+                    <label for="ingestionStrategy">Ingestion Strategy</label>
+                    <input type="text" id="ingestionStrategyDisplay" value="Type 2 - CSV Pivot Ingestion" class="form-control" readonly>
+                    <input type="hidden" id="ingestionStrategy" name="ingestionStrategy" value="type2">
                 </div>
                 
                 <div class="form-group">
-                    <label for="ingestionStrategy">Ingestion Strategy</label>
-                    <select id="ingestionStrategy" name="ingestionStrategy" required>
-                        <option value="">Select strategy</option>
-                        <option value="type1">Type 1 - CSV Direct Ingestion</option>
-                        <option value="type2">Type 2 - CSV Pivot Ingestion</option>
-                        <option value="type3">Type 3 - JSON Ingestion</option>
-                    </select>
-                    <div id="strategyError" class="field-error">Please select an ingestion strategy</div>
+                    <label for="fileType">File Type</label>
+                    <input type="text" id="fileType" name="fileType" value="CSV" class="form-control" readonly>
+                    <input type="hidden" name="fileType" value="csv">
                 </div>
                 
                 <div class="form-group">
                     <label for="file">Upload File</label>
-                    <input type="file" id="file" name="file" accept=".csv,.json" required>
+                    <input type="file" id="file" name="file" accept=".csv" required>
                     <div id="fileError" class="field-error">Please select a file to upload</div>
                 </div>
 
                 <div class="button-container">
-                    <button type="submit" class="btn-submit">Upload and Process</button>
-                    <a href="/dump-data" class="ignore-link">
-                        <i class="fas fa-arrow-right"></i>Ignore Ingestion and take me to Request Data Dump Page
-                    </a>
+                    <button type="submit" class="btn btn-primary btn-submit">Upload and Process</button>
                 </div>
             </form>
         </div>
@@ -471,8 +440,6 @@
         function validateForm() {
             let isValid = true;
             const userName = document.getElementById('userName');
-            const fileType = document.getElementById('fileType');
-            const ingestionStrategy = document.getElementById('ingestionStrategy');
             const file = document.getElementById('file');
 
             // Reset previous error states
@@ -486,22 +453,13 @@
                 isValid = false;
             }
 
-            // Validate File Type
-            if (!fileType.value) {
-                document.getElementById('fileTypeError').style.display = 'block';
-                fileType.classList.add('error');
-                isValid = false;
-            }
-
-            // Validate Ingestion Strategy
-            if (!ingestionStrategy.value) {
-                document.getElementById('strategyError').style.display = 'block';
-                ingestionStrategy.classList.add('error');
-                isValid = false;
-            }
-
             // Validate File
             if (!file.files || !file.files[0]) {
+                document.getElementById('fileError').style.display = 'block';
+                file.classList.add('error');
+                isValid = false;
+            } else if (!file.files[0].name.toLowerCase().endsWith('.csv')) {
+                document.getElementById('fileError').textContent = 'Please select a CSV file';
                 document.getElementById('fileError').style.display = 'block';
                 file.classList.add('error');
                 isValid = false;
@@ -521,6 +479,8 @@
             showError(null);
 
             const formData = new FormData(document.getElementById('uploadForm'));
+            // Ensure ingestionStrategy is set to type2
+            formData.set('ingestionStrategy', 'type2');
 
             try {
                 const response = await fetch('/submit-form', {

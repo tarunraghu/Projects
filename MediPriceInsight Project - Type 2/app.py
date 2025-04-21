@@ -331,6 +331,8 @@ def create_hospital_charges_archive_table():
             standard_charge_negotiated_dollar NUMERIC(20,2),
             standard_charge_min NUMERIC(20,2),
             standard_charge_max NUMERIC(20,2),
+            standard_charge_discounted_cash NUMERIC(20,2),
+            estimated_amount NUMERIC(20,2),
             is_active BOOLEAN DEFAULT FALSE,
             original_created_at TIMESTAMP,
             archive_reason TEXT,
@@ -1031,7 +1033,7 @@ def submit_form():
             
         # Get form data
         user_name = request.form.get('userName')
-        file_type = request.form.get('fileType')
+        file_type = request.form.get('fileType', '').lower()  # Convert to lowercase
         ingestion_strategy = request.form.get('ingestionStrategy')
         
         # Validate required fields
@@ -2891,3 +2893,47 @@ def archive_inactive_records_route():
             'success': False,
             'error': str(e)
         }), 500
+
+def recreate_hospital_charges_archive_table():
+    """Drop and recreate the hospital_charges_archive table with updated schema"""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        # Drop the existing table
+        cur.execute("DROP TABLE IF EXISTS hospital_charges_archive;")
+        
+        # Create the archive table with updated schema
+        cur.execute("""
+        CREATE TABLE hospital_charges_archive (
+            id SERIAL PRIMARY KEY,
+            hospital_name TEXT,
+            description TEXT,
+            code VARCHAR(50),
+            code_type VARCHAR(50),
+            payer_name VARCHAR(255),
+            plan_name VARCHAR(255),
+            standard_charge_gross NUMERIC(20,2),
+            standard_charge_negotiated_dollar NUMERIC(20,2),
+            standard_charge_min NUMERIC(20,2),
+            standard_charge_max NUMERIC(20,2),
+            standard_charge_discounted_cash NUMERIC(20,2),
+            estimated_amount NUMERIC(20,2),
+            is_active BOOLEAN DEFAULT FALSE,
+            original_created_at TIMESTAMP,
+            archive_reason TEXT,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        
+        conn.commit()
+        logger.info("Successfully recreated hospital_charges_archive table with updated schema")
+        
+    except Exception as e:
+        logger.error(f"Error recreating hospital_charges_archive table: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        return_db_connection(conn)

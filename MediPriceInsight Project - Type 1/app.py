@@ -331,7 +331,8 @@ def create_hospital_charges_archive_table():
             standard_charge_negotiated_dollar NUMERIC(20,2),
             standard_charge_min NUMERIC(20,2),
             standard_charge_max NUMERIC(20,2),
-            is_active BOOLEAN DEFAULT FALSE,
+            standard_charge_discounted_cash NUMERIC(20,2),
+            estimated_amount NUMERIC(20,2),
             original_created_at TIMESTAMP,
             archive_reason TEXT,
             archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -339,7 +340,7 @@ def create_hospital_charges_archive_table():
         """)
         
         conn.commit()
-        logger.info("Successfully created hospital_charges_archive table with new schema")
+        logger.info("Successfully created hospital_charges_archive table with finalized schema")
         
     except Exception as e:
         logger.error(f"Error creating hospital_charges_archive table: {str(e)}")
@@ -975,7 +976,7 @@ def submit_form():
             
         # Get form data
         user_name = request.form.get('userName')
-        file_type = request.form.get('fileType')
+        file_type = request.form.get('fileType', '').lower()  # Convert to lowercase and provide default empty string
         ingestion_strategy = request.form.get('ingestionStrategy')
         
         # Validate required fields
@@ -993,7 +994,7 @@ def submit_form():
             }), 400
             
         # Validate file type
-        if file_type not in ['csv', 'json']:
+        if file_type != 'csv':
             return jsonify({
                 'success': False,
                 'error': f'Unsupported file type: {file_type}'
@@ -2295,13 +2296,15 @@ def archive_hospital_records(hospital_name):
                     hospital_name, description, code, code_type, 
                     payer_name, plan_name, standard_charge_gross,
                     standard_charge_negotiated_dollar, standard_charge_min,
-                    standard_charge_max, original_created_at, archive_reason
+                    standard_charge_max, standard_charge_discounted_cash,
+                    estimated_amount, original_created_at, archive_reason
                 )
                 SELECT 
                     hospital_name, description, code, code_type,
                     payer_name, plan_name, standard_charge_gross,
                     standard_charge_negotiated_dollar, standard_charge_min,
-                    standard_charge_max, created_at, 'New data ingestion'
+                    standard_charge_max, standard_charge_discounted_cash,
+                    estimated_amount, created_at, 'New data ingestion'
                 FROM hospital_charges
                 WHERE hospital_name = %s AND is_active = TRUE;
             """, (hospital_name,))

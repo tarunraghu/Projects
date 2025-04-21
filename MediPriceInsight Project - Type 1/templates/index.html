@@ -227,6 +227,7 @@
 
         .button-container {
             margin-top: 20px;
+            text-align: center;
         }
 
         .button-container .btn-submit:first-child {
@@ -397,36 +398,24 @@
                 
                 <div class="form-group">
                     <label for="fileType">File Type</label>
-                    <select id="fileType" name="fileType" required>
-                        <option value="">Select file type</option>
-                        <option value="csv">CSV</option>
-                        <option value="json">JSON</option>
-                    </select>
-                    <div id="fileTypeError" class="field-error">Please select a file type</div>
+                    <input type="text" id="fileType" name="fileType" value="CSV" readonly>
+                    <input type="hidden" name="fileType" value="csv">
                 </div>
                 
                 <div class="form-group">
                     <label for="ingestionStrategy">Ingestion Strategy</label>
-                    <select id="ingestionStrategy" name="ingestionStrategy" required>
-                        <option value="">Select strategy</option>
-                        <option value="type1">Type 1 - CSV Direct Ingestion</option>
-                        <option value="type2">Type 2 - CSV Pivot Ingestion</option>
-                        <option value="type3">Type 3 - JSON Ingestion</option>
-                    </select>
-                    <div id="strategyError" class="field-error">Please select an ingestion strategy</div>
+                    <input type="text" id="ingestionStrategyDisplay" value="Type 1 - CSV Direct Ingestion" readonly>
+                    <input type="hidden" id="ingestionStrategy" name="ingestionStrategy" value="type1">
                 </div>
                 
                 <div class="form-group">
                     <label for="file">Upload File</label>
-                    <input type="file" id="file" name="file" accept=".csv,.json" required>
-                    <div id="fileError" class="field-error">Please select a file to upload</div>
+                    <input type="file" id="file" name="file" accept=".csv" required>
+                    <div id="fileError" class="field-error">Please select a CSV file to upload</div>
                 </div>
 
                 <div class="button-container">
                     <button type="submit" class="btn-submit">Upload and Process</button>
-                    <a href="/dump-data" class="ignore-link">
-                        <i class="fas fa-arrow-right"></i>Ignore Ingestion and take me to Request Data Dump Page
-                    </a>
                 </div>
             </form>
         </div>
@@ -471,8 +460,6 @@
         function validateForm() {
             let isValid = true;
             const userName = document.getElementById('userName');
-            const fileType = document.getElementById('fileType');
-            const ingestionStrategy = document.getElementById('ingestionStrategy');
             const file = document.getElementById('file');
 
             // Reset previous error states
@@ -486,25 +473,20 @@
                 isValid = false;
             }
 
-            // Validate File Type
-            if (!fileType.value) {
-                document.getElementById('fileTypeError').style.display = 'block';
-                fileType.classList.add('error');
-                isValid = false;
-            }
-
-            // Validate Ingestion Strategy
-            if (!ingestionStrategy.value) {
-                document.getElementById('strategyError').style.display = 'block';
-                ingestionStrategy.classList.add('error');
-                isValid = false;
-            }
-
             // Validate File
             if (!file.files || !file.files[0]) {
                 document.getElementById('fileError').style.display = 'block';
                 file.classList.add('error');
                 isValid = false;
+            } else {
+                // Validate file extension
+                const fileName = file.files[0].name;
+                if (!fileName.toLowerCase().endsWith('.csv')) {
+                    document.getElementById('fileError').style.display = 'block';
+                    document.getElementById('fileError').textContent = 'Please select a CSV file';
+                    file.classList.add('error');
+                    isValid = false;
+                }
             }
 
             return isValid;
