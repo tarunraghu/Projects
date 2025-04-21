@@ -1161,6 +1161,14 @@ def preview_data():
             # Map only the columns we need, using available columns
             select_exprs = []
             
+            # Hospital Name
+            select_exprs.append(
+                coalesce(
+                    get_column(["hospital_name", "Hospital Name", "HOSPITAL_NAME"]),
+                    lit(hospital_name)  # Use the hospital name from session if not in file
+                ).alias("hospital_name")
+            )
+            
             # Description
             select_exprs.append(
                 coalesce(
@@ -1178,71 +1186,72 @@ def preview_data():
             # Code Type
             select_exprs.append(
                 coalesce(
-                    get_column(["code_type", "Code Type", "CodeType", "CODE_TYPE"]),
+                    get_column(["code_type", "Code Type", "CODE_TYPE"]),
                 ).alias("code_type")
             )
             
             # Payer Name
             select_exprs.append(
                 coalesce(
-                    get_column(["payer_name", "Payer Name", "PayerName", "PAYER_NAME"]),
+                    get_column(["payer_name", "Payer Name", "PAYER_NAME"]),
                 ).alias("payer_name")
             )
             
             # Plan Name
             select_exprs.append(
                 coalesce(
-                    get_column(["plan_name", "Plan Name", "PlanName", "PLAN_NAME"]),
+                    get_column(["plan_name", "Plan Name", "PLAN_NAME"]),
                 ).alias("plan_name")
             )
             
-            # Gross Charge
+            # Standard Charge Gross Charge
             select_exprs.append(
                 coalesce(
-                    get_column(["gross_charge", "Gross Charge", "GrossCharge", "GROSS_CHARGE"]),
-                ).alias("standard_charge_gross_charge")
+                    get_column(["standard_charge_gross", "Gross Charge", "GROSS_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_gross")
             )
             
-            # Negotiated Charge
+            # Standard Charge Negotiated Dollar
             select_exprs.append(
                 coalesce(
-                    get_column(["negotiated_charge", "Negotiated Rate", "NegotiatedRate", "NEGOTIATED_CHARGE"]),
-                ).alias("standard_charge_negotiated_dollar")
+                    get_column(["standard_charge_negotiated_dollar", "Negotiated Rate", "NEGOTIATED_RATE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_negotiated_dollar")
             )
             
-            # Minimum
+            # Standard Charge Min
             select_exprs.append(
                 coalesce(
-                    get_column(["minimum", "Minimum", "MIN", "MINIMUM"]),
-                ).alias("standard_charge_min")
+                    get_column(["standard_charge_min", "Min Charge", "MIN_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_min")
             )
             
-            # Maximum
+            # Standard Charge Max
             select_exprs.append(
                 coalesce(
-                    get_column(["maximum", "Maximum", "MAX", "MAXIMUM"]),
-                ).alias("standard_charge_max")
+                    get_column(["standard_charge_max", "Max Charge", "MAX_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_max")
             )
             
             # Estimated Amount
             select_exprs.append(
                 coalesce(
-                    get_column(["estimated_amount", "Estimated Amount", "EstimatedAmount", "ESTIMATED_AMOUNT"]),
-                ).alias("estimated_amount")
+                    get_column(["estimated_amount", "Estimated Amount", "ESTIMATED_AMOUNT"]),
+                ).cast("decimal(20,2)").alias("estimated_amount")
             )
             
-            # Discounted Cash
+            # Standard Charge Discounted Cash
             select_exprs.append(
                 coalesce(
-                    get_column(["discounted_cash", "Discounted Cash", "DiscountedCash", "DISCOUNTED_CASH"]),
-                ).alias("standard_charge_discounted_cash")
+                    get_column(["standard_charge_discounted_cash", "Discounted Cash", "DISCOUNTED_CASH"]),
+                ).cast("decimal(20,2)").alias("standard_charge_discounted_cash")
             )
             
-            # Create the mapped DataFrame
+            # Create the mapped DataFrame for preview (without metadata columns)
             mapped_df = df.select(*select_exprs)
             
-            # Add hospital_name from session
-            mapped_df = mapped_df.withColumn("hospital_name", lit(hospital_name))
+            # Add hospital_name from session if not already present
+            if "hospital_name" not in mapped_df.columns:
+                mapped_df = mapped_df.withColumn("hospital_name", lit(hospital_name))
             
             # Get preview data (first 5 rows)
             preview_df = mapped_df.limit(5)
@@ -1256,6 +1265,9 @@ def preview_data():
             # Get column information
             columns = mapped_df.columns
             total_rows = mapped_df.count()
+            
+            # Store the original DataFrame in session for later use during loading
+            session['preview_df_columns'] = columns.copy()
             
             # Log column information
             logger.info(f"Processed columns ({len(columns)}): {columns}")
@@ -1404,16 +1416,7 @@ def process_chunks(df, chunk_size=50000, task=None):
             raise
 
 def process_hospital_charges(data_file, hospital_name, task_id, user_name='system', ingestion_type='unknown', chunk_size=50000):
-    """Process and load hospital charges data in chunks.
-    
-    Args:
-        data_file (str): Path to the CSV file containing hospital charges data
-        hospital_name (str): Name of the hospital
-        task_id (str): Unique identifier for the processing task
-        user_name (str): Name of the user initiating the process
-        ingestion_type (str): Type of ingestion strategy
-        chunk_size (int): Number of records to process in each chunk
-    """
+    """Process and load hospital charges data in chunks."""
     start_time = datetime.now()
     log_data = {
         'hospital_name': hospital_name,
@@ -1442,27 +1445,10 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.progress = 10
         task.message = 'Archiving existing records...'
         
-        # Archive existing records using stored procedure
-        conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute("BEGIN;")
-            cur.execute("CALL archive_hospital_records(%s)", (hospital_name,))
-            cur.execute("COMMIT;")
-            archived_count = cur.rowcount
-            log_data['archived_records'] = archived_count
-            task.message = f'Archived {archived_count:,} existing records'
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Error during hospital data archival: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                return_db_connection(conn)
+        # Archive existing records
+        archived_count = archive_hospital_records(hospital_name)
+        log_data['archived_records'] = archived_count
+        task.message = f'Archived {archived_count:,} existing records'
 
         task.progress = 20
         task.message = 'Reading and processing data file...'
@@ -1479,86 +1465,151 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             .getOrCreate()
             
         try:
-            # Read CSV file
+            # Read the CSV file with permissive mode
             df = spark.read \
                 .option("header", "true") \
-                .option("inferSchema", "true") \
                 .option("mode", "PERMISSIVE") \
-                .option("nullValue", "NaN") \
                 .option("encoding", "UTF-8") \
-                .option("emptyValue", "") \
-                .option("treatEmptyValuesAsNulls", "true") \
                 .csv(data_file)
+                
+            # Get available columns
+            available_columns = df.columns
+            logger.info(f"Available columns in CSV: {available_columns}")
             
-            if df is None:
-                raise ValueError("Failed to read CSV file: DataFrame is None")
+            # Function to safely get column reference
+            def get_column(possible_names):
+                for name in possible_names:
+                    if name in available_columns:
+                        return col(name)
+                return lit(None)
             
-            # Get total records
-            total_records = df.count()
-            if total_records == 0:
-                raise ValueError("CSV file is empty or contains no valid records")
+            # Map columns using the same logic as preview
+            select_exprs = []
             
-            log_data['total_records'] = total_records
-            task.progress = 30
-            task.message = f'Processing {total_records:,} records...'
-            
-            # Map columns according to the specified field mappings
-            df = df.select(
-                col("hospital_name"),
-                col("description"),
-                col("code"),
-                col("code_type"),
-                col("payer_name"),
-                col("plan_name"),
-                col("gross_charge").alias("standard_charge_gross_charge"),
-                col("negotiated_charge").alias("standard_charge_negotiated_dollar"),
-                col("minimum").alias("standard_charge_min"),
-                col("maximum").alias("standard_charge_max"),
-                col("estimated_amount"),
-                col("discounted_cash").alias("standard_charge_discounted_cash")
+            # Hospital Name
+            select_exprs.append(
+                coalesce(
+                    get_column(["hospital_name", "Hospital Name", "HOSPITAL_NAME"]),
+                    lit(hospital_name)
+                ).alias("hospital_name")
             )
             
-            # Add hospital name and timestamps
-            df = df.withColumn('hospital_name', lit(hospital_name))
+            # Description
+            select_exprs.append(
+                coalesce(
+                    get_column(["description", "Description", "DESCRIPTION"]),
+                ).alias("description")
+            )
+            
+            # Code
+            select_exprs.append(
+                coalesce(
+                    get_column(["code", "Code", "CODE"]),
+                ).alias("code")
+            )
+            
+            # Code Type
+            select_exprs.append(
+                coalesce(
+                    get_column(["code_type", "Code Type", "CODE_TYPE"]),
+                ).alias("code_type")
+            )
+            
+            # Payer Name
+            select_exprs.append(
+                coalesce(
+                    get_column(["payer_name", "Payer Name", "PAYER_NAME"]),
+                ).alias("payer_name")
+            )
+            
+            # Plan Name
+            select_exprs.append(
+                coalesce(
+                    get_column(["plan_name", "Plan Name", "PLAN_NAME"]),
+                ).alias("plan_name")
+            )
+            
+            # Standard Charge Gross Charge
+            select_exprs.append(
+                coalesce(
+                    get_column(["standard_charge_gross", "Gross Charge", "GROSS_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_gross")
+            )
+            
+            # Standard Charge Negotiated Dollar
+            select_exprs.append(
+                coalesce(
+                    get_column(["standard_charge_negotiated_dollar", "Negotiated Rate", "NEGOTIATED_RATE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_negotiated_dollar")
+            )
+            
+            # Standard Charge Min
+            select_exprs.append(
+                coalesce(
+                    get_column(["standard_charge_min", "Min Charge", "MIN_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_min")
+            )
+            
+            # Standard Charge Max
+            select_exprs.append(
+                coalesce(
+                    get_column(["standard_charge_max", "Max Charge", "MAX_CHARGE"]),
+                ).cast("decimal(20,2)").alias("standard_charge_max")
+            )
+            
+            # Estimated Amount
+            select_exprs.append(
+                coalesce(
+                    get_column(["estimated_amount", "Estimated Amount", "ESTIMATED_AMOUNT"]),
+                ).cast("decimal(20,2)").alias("estimated_amount")
+            )
+            
+            # Standard Charge Discounted Cash
+            select_exprs.append(
+                coalesce(
+                    get_column(["standard_charge_discounted_cash", "Discounted Cash", "DISCOUNTED_CASH"]),
+                ).cast("decimal(20,2)").alias("standard_charge_discounted_cash")
+            )
+            
+            # Create the mapped DataFrame
+            df = df.select(*select_exprs)
+            
+            # Add metadata columns
             current_time = datetime.now()
             df = df.withColumn('is_active', lit(True)) \
                 .withColumn('created_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp')) \
                 .withColumn('updated_at', lit(current_time.strftime('%Y-%m-%d %H:%M:%S')).cast('timestamp'))
             
-            task.progress = 50
-            task.message = 'Removing duplicate records...'
+            # Get total records
+            total_records = df.count()
+            if total_records == 0:
+                raise ValueError("No valid records found in data")
             
-            # Remove duplicates based on the specified fields
+            log_data['total_records'] = total_records
+            task.progress = 30
+            task.message = f'Processing {total_records:,} records...'
+            
+            # Remove duplicates
             dedup_columns = [
-                'hospital_name', 'description', 'code', 'code_type',
-                'payer_name', 'plan_name'
+                'hospital_name', 'description', 'code', 'code_type'
             ]
             df = df.dropDuplicates(dedup_columns)
             
             unique_records = df.count()
             if unique_records == 0:
-                raise ValueError("No valid records found after processing and deduplication")
+                raise ValueError("No valid records found after deduplication")
             
             log_data['unique_records'] = unique_records
             task.progress = 60
             task.message = f'Loading {unique_records:,} unique records...'
             
-            # Process in chunks with progress updates
-            total_chunks = (unique_records + chunk_size - 1) // chunk_size
-            progress_increment = 35 / total_chunks  # Remaining 35% (60-95) divided by chunks
-            
-            def update_progress(chunk_num):
-                progress = min(95, 60 + int(chunk_num * progress_increment))
-                task.progress = progress
-                task.message = f'Loading data: {progress}% complete (chunk {chunk_num + 1}/{total_chunks})'
-            
             # Write data to PostgreSQL
             df.write \
                 .format("jdbc") \
-                .option("url", "jdbc:postgresql://localhost:5432/healthcare") \
+                .option("url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
                 .option("dbtable", "hospital_charges") \
-                .option("user", "postgres") \
-                .option("password", "postgres") \
+                .option("user", DB_CONFIG['user']) \
+                .option("password", DB_CONFIG['password']) \
                 .option("driver", "org.postgresql.Driver") \
                 .mode("append") \
                 .save()
@@ -1602,10 +1653,6 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 'elapsed_time': final_elapsed_str
             }
             
-        except Exception as e:
-            logger.error(f"Error processing hospital data: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
         finally:
             if spark:
                 spark.stop()
@@ -1967,8 +2014,16 @@ def log_error():
             'error': str(e)
         }), 500
 
-def archive_hospital_records(hospital_name):
-    """Archive existing records for a hospital"""
+def archive_hospital_records(hospital_name, archive_reason='New data ingestion'):
+    """Archive existing records for a hospital
+    
+    Args:
+        hospital_name (str): Name of the hospital whose records need to be archived
+        archive_reason (str): Reason for archiving the records
+        
+    Returns:
+        int: Number of records archived
+    """
     conn = None
     cur = None
     try:
@@ -1995,17 +2050,17 @@ def archive_hospital_records(hospital_name):
                     payer_name, plan_name, standard_charge_gross,
                     standard_charge_negotiated_dollar, standard_charge_min,
                     standard_charge_max, estimated_amount, standard_charge_discounted_cash,
-                    original_created_at, archive_reason
+                    original_created_at, archive_reason, archived_at
                 )
                 SELECT 
                     hospital_name, description, code, code_type,
                     payer_name, plan_name, standard_charge_gross,
                     standard_charge_negotiated_dollar, standard_charge_min,
                     standard_charge_max, estimated_amount, standard_charge_discounted_cash,
-                    created_at, 'New data ingestion'
+                    created_at, %s, CURRENT_TIMESTAMP
                 FROM hospital_charges
                 WHERE hospital_name = %s AND is_active = TRUE;
-            """, (hospital_name,))
+            """, (archive_reason, hospital_name))
             
             # Mark existing records as inactive
             cur.execute("""
@@ -2036,6 +2091,94 @@ def archive_hospital_records(hospital_name):
             cur.close()
         if conn:
             return_db_connection(conn)
+
+def archive_inactive_records():
+    """Archive all inactive records from hospital_charges to hospital_charges_archive"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Begin transaction
+        cur.execute("BEGIN;")
+        
+        # Get count of records to be archived
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM hospital_charges 
+            WHERE is_active = FALSE;
+        """)
+        
+        count = cur.fetchone()[0]
+        
+        if count > 0:
+            # Archive inactive records
+            cur.execute("""
+                INSERT INTO hospital_charges_archive (
+                    hospital_name, description, code, code_type, 
+                    payer_name, plan_name, standard_charge_gross_charge,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, estimated_amount, standard_charge_discounted_cash,
+                    original_created_at, archive_reason, archived_at
+                )
+                SELECT 
+                    hospital_name, description, code, code_type,
+                    payer_name, plan_name, standard_charge_gross_charge,
+                    standard_charge_negotiated_dollar, standard_charge_min,
+                    standard_charge_max, estimated_amount, standard_charge_discounted_cash,
+                    created_at, 'Inactive record cleanup', CURRENT_TIMESTAMP
+                FROM hospital_charges
+                WHERE is_active = FALSE;
+            """)
+            
+            # Delete the archived records from the main table
+            cur.execute("""
+                DELETE FROM hospital_charges 
+                WHERE is_active = FALSE;
+            """)
+            
+            # Commit transaction
+            conn.commit()
+            
+            logger.info(f"Successfully archived {count} inactive records")
+            return count
+        else:
+            # Commit transaction even if no records to archive
+            conn.commit()
+            logger.info("No inactive records found to archive")
+            return 0
+            
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Error archiving inactive records: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            return_db_connection(conn)
+
+@app.route('/archive-inactive', methods=['POST'])
+def archive_inactive_records_route():
+    """Endpoint to trigger archiving of inactive records"""
+    try:
+        archived_count = archive_inactive_records()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully archived {archived_count} inactive records'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in archive_inactive_records_route: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/dump-data')
 def dump_data_page():
@@ -2417,89 +2560,3 @@ def get_hospitals_list():
             cur.close()
         if conn:
             return_db_connection(conn)
-
-def archive_inactive_records():
-    """Move all inactive records from hospital_charges to hospital_charges_archive"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Begin transaction
-        cur.execute("BEGIN;")
-        
-        # Get count of records to be archived
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM hospital_charges 
-            WHERE is_active = FALSE;
-        """)
-        
-        count = cur.fetchone()[0]
-        
-        if count > 0:
-            # Archive inactive records
-            cur.execute("""
-                INSERT INTO hospital_charges_archive (
-                    hospital_name, description, code, code_type, 
-                    payer_name, plan_name, standard_charge_gross,
-                    standard_charge_negotiated_dollar, standard_charge_min,
-                    standard_charge_max, original_created_at, archive_reason
-                )
-                SELECT 
-                    hospital_name, description, code, code_type,
-                    payer_name, plan_name, standard_charge_gross,
-                    standard_charge_negotiated_dollar, standard_charge_min,
-                    standard_charge_max, created_at, 'Inactive record cleanup'
-                FROM hospital_charges
-                WHERE is_active = FALSE;
-            """)
-            
-            # Delete the archived records from the main table
-            cur.execute("""
-                DELETE FROM hospital_charges 
-                WHERE is_active = FALSE;
-            """)
-            
-            # Commit transaction
-            conn.commit()
-            
-            logger.info(f"Successfully archived {count} inactive records")
-            return count
-        else:
-            # Commit transaction even if no records to archive
-            conn.commit()
-            logger.info("No inactive records found to archive")
-            return 0
-            
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        logger.error(f"Error archiving inactive records: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            return_db_connection(conn)
-
-@app.route('/archive-inactive', methods=['POST'])
-def archive_inactive_records_route():
-    """Endpoint to trigger archiving of inactive records"""
-    try:
-        archived_count = archive_inactive_records()
-        
-        return jsonify({
-            'success': True,
-            'message': f'Successfully archived {archived_count} inactive records'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in archive_inactive_records_route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
