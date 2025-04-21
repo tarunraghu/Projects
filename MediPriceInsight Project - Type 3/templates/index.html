@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediPriceInsight Data Ingestion Tool</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #7c3aed;
+            --secondary-color: #9333ea;
+            --error-color: #ef4444;
+            --success-color: #10b981;
+            --step-active: #7c3aed;
+            --step-completed: #9333ea;
+            --step-pending: #e5e7eb;
+            --background-color: #f3f4f6;
+            --card-background: #ffffff;
+            --text-color: #1f2937;
+            --border-radius: 12px;
+            --box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--background-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: var(--card-background);
+            padding: 40px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .header h1 {
+            color: var(--primary-color);
+            margin-bottom: 16px;
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .header p {
+            color: #6b7280;
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .steps-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 40px 0;
+            padding: 30px;
+            background-color: #f9fafb;
+            border-radius: var(--border-radius);
+            position: relative;
+            gap: 160px;
+        }
+
+        .step {
+            flex: 0 0 auto;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+            width: 120px;
+        }
+
+        /* Line before the step */
+        .step::before {
+            content: '';
+            position: absolute;
+            top: 24px;
+            left: -80px;
+            width: 80px;
+            height: 3px;
+            background-color: var(--step-pending);
+            z-index: 0;
+        }
+
+        /* Line after the step */
+        .step::after {
+            content: '';
+            position: absolute;
+            top: 24px;
+            right: -80px;
+            width: 80px;
+            height: 3px;
+            background-color: var(--step-pending);
+            z-index: 0;
+        }
+
+        /* Hide line before first step */
+        .step:first-child::before {
+            display: none;
+        }
+
+        /* Hide line after last step */
+        .step:last-child::after {
+            display: none;
+        }
+
+        /* Active and completed step lines */
+        .step.active::before,
+        .step.completed::before,
+        .step.completed::after {
+            background-color: var(--step-completed);
+        }
+
+        .step.active::after {
+            background-color: var(--step-pending);
+        }
+
+        .step-number {
+            width: 50px;
+            height: 50px;
+            background-color: var(--step-pending);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-weight: 600;
+            font-size: 18px;
+            color: #6b7280;
+            position: relative;
+            z-index: 2;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 0 8px #f9fafb;
+            border: 2px solid var(--step-pending);
+        }
+
+        .step.active .step-number {
+            background-color: var(--step-active);
+            color: white;
+            border-color: var(--step-active);
+            transform: scale(1.1);
+        }
+
+        .step.completed .step-number {
+            background-color: var(--step-completed);
+            color: white;
+            border-color: var(--step-completed);
+        }
+
+        .step-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+            font-size: 16px;
+        }
+
+        .step-description {
+            font-size: 14px;
+            color: #6b7280;
+            line-height: 1.4;
+        }
+
+        .form-container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 30px;
+            background-color: #f9fafb;
+            border-radius: var(--border-radius);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .form-group label::after {
+            content: '*';
+            color: var(--error-color);
+            margin-left: 4px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+
+        .form-group input.error,
+        .form-group select.error {
+            border-color: var(--error-color);
+        }
+
+        .field-error {
+            color: var(--error-color);
+            font-size: 14px;
+            margin-top: 4px;
+            display: none;
+        }
+
+        .button-container {
+            margin-top: 20px;
+        }
+
+        .button-container .btn-submit:first-child {
+            float: left;
+        }
+
+        .ignore-link {
+            display: block;
+            clear: both;
+            margin-top: 20px;
+            padding-top: 15px;
+            text-decoration: none;
+            color: #9147ff;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .ignore-link:hover {
+            color: #7e3bd6;
+            text-decoration: underline;
+        }
+
+        .ignore-link i {
+            margin-right: 8px;
+            font-size: 12px;
+        }
+
+        .btn-submit {
+            background-color: #9147ff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: auto;
+            font-size: 14px;
+            min-width: 150px;
+        }
+
+        .btn-submit:hover {
+            background-color: #7e3bd6;
+            transform: translateY(-1px);
+        }
+
+        .btn-submit:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-skip-ingestion {
+            background-color: #9147ff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            text-decoration: none;
+            font-size: 14px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+
+        .btn-skip-ingestion:hover {
+            background-color: #7e3bd6;
+            color: white;
+            transform: translateY(-1px);
+            text-decoration: none;
+        }
+
+        .spinner {
+            display: none;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            color: var(--error-color);
+            margin: 16px 0;
+            padding: 16px;
+            background-color: #fef2f2;
+            border-radius: 8px;
+            border: 1px solid #fee2e2;
+            display: none;
+        }
+
+        .success-message {
+            color: var(--success-color);
+            margin: 16px 0;
+            padding: 16px;
+            background-color: #f0fdf4;
+            border-radius: 8px;
+            border: 1px solid #dcfce7;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            .steps-container {
+                flex-direction: column;
+                gap: 20px;
+            }
+
+            .step:not(:last-child)::after {
+                display: none;
+            }
+
+            .form-container {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>MediPriceInsight Data Ingestion Tool</h1>
+            <p>Upload your hospital data file to begin the ingestion process</p>
+        </div>
+
+        <!-- Steps -->
+        <div class="steps-container">
+            <div class="step active">
+                <div class="step-number">1</div>
+                <div class="step-title">File Selection</div>
+                <div class="step-description">Select and upload CSV file</div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-title">Review Address</div>
+                <div class="step-description">Verify hospital address data</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-title">Review Charges</div>
+                <div class="step-description">Verify hospital charges data</div>
+            </div>
+        </div>
+
+        <!-- Form Section -->
+        <div class="form-section">
+            <form id="uploadForm" onsubmit="return handleSubmit(event)">
+                <div class="form-group">
+                    <label for="userName">User Name</label>
+                    <input type="text" id="userName" name="userName" required>
+                    <div id="userNameError" class="field-error">Please enter your user name</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="fileType">File Type</label>
+                    <input type="text" id="fileTypeDisplay" value="JSON" readonly class="form-control">
+                    <input type="hidden" id="fileType" name="fileType" value="json">
+                </div>
+                
+                <div class="form-group">
+                    <label for="ingestionStrategy">Ingestion Strategy</label>
+                    <input type="text" id="ingestionStrategyDisplay" value="Type 3 - JSON Ingestion" readonly class="form-control">
+                    <input type="hidden" id="ingestionStrategy" name="ingestionStrategy" value="type3">
+                </div>
+                
+                <div class="form-group">
+                    <label for="file">Upload File</label>
+                    <input type="file" id="file" name="file" accept=".json" required>
+                    <div id="fileError" class="field-error">Please select a JSON file to upload</div>
+                </div>
+
+                <div class="button-container">
+                    <button type="submit" class="btn-submit">Upload and Process</button>
+                    <a href="/dump-data" class="ignore-link">
+                        <i class="fas fa-arrow-right"></i>Ignore Ingestion and take me to Request Data Dump Page
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <!-- Message Container -->
+        <div class="message-container">
+            <div id="spinner" class="spinner"></div>
+            <div id="errorMessage" class="error-message"></div>
+            <div id="successMessage" class="success-message"></div>
+        </div>
+    </div>
+
+    <script>
+        function showSpinner() {
+            document.getElementById('spinner').style.display = 'block';
+        }
+
+        function hideSpinner() {
+            document.getElementById('spinner').style.display = 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            if (message) {
+                errorDiv.textContent = message;
+                errorDiv.style.display = 'block';
+            } else {
+                errorDiv.style.display = 'none';
+            }
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            if (message) {
+                successDiv.textContent = message;
+                successDiv.style.display = 'block';
+            } else {
+                successDiv.style.display = 'none';
+            }
+        }
+
+        function validateForm() {
+            let isValid = true;
+            const userName = document.getElementById('userName');
+            const file = document.getElementById('file');
+
+            // Reset previous error states
+            document.querySelectorAll('.field-error').forEach(error => error.style.display = 'none');
+            document.querySelectorAll('.error').forEach(field => field.classList.remove('error'));
+
+            // Validate User Name
+            if (!userName.value.trim()) {
+                document.getElementById('userNameError').style.display = 'block';
+                userName.classList.add('error');
+                isValid = false;
+            }
+
+            // Validate File
+            if (!file.files || !file.files[0]) {
+                document.getElementById('fileError').style.display = 'block';
+                file.classList.add('error');
+                isValid = false;
+            } else if (!file.files[0].name.toLowerCase().endsWith('.json')) {
+                document.getElementById('fileError').textContent = 'Please select a valid JSON file';
+                document.getElementById('fileError').style.display = 'block';
+                file.classList.add('error');
+                isValid = false;
+            }
+
+            return isValid;
+        }
+
+        async function handleSubmit(event) {
+            event.preventDefault();
+            
+            if (!validateForm()) {
+                return false;
+            }
+
+            showSpinner();
+            showError(null);
+
+            const formData = new FormData(document.getElementById('uploadForm'));
+
+            try {
+                const response = await fetch('/submit-form', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    window.location.href = result.redirect;
+                } else {
+                    showError(result.error || 'Failed to process file');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Error uploading file. Please try again.');
+            } finally {
+                hideSpinner();
+            }
+
+            return false;
+        }
+    </script>
+</body>
+</html>

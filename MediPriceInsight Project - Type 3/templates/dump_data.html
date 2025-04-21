@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Data Dump</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container {
+            max-width: 800px;
+            margin-top: 30px;
+            margin-bottom: 30px;
+        }
+        .page-title {
+            color: #6f42c1;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        .page-subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        .btn-dump {
+            background-color: #6f42c1;
+            border-color: #6f42c1;
+            color: white;
+            padding: 8px 20px;
+            font-size: 14px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        .btn-dump:hover {
+            background-color: #5a32a3;
+            border-color: #5a32a3;
+        }
+        .btn-submit:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .progress {
+            display: none;
+            margin-top: 20px;
+            height: 10px;
+            border-radius: 5px;
+        }
+        .progress-bar {
+            background-color: #6f42c1;
+        }
+        #errorMessage {
+            display: none;
+            margin-top: 20px;
+        }
+        #downloadSection {
+            display: none;
+            margin-top: 20px;
+            margin-bottom: 60px;  /* Add space for fixed button */
+        }
+        .dump-buttons {
+            text-align: center;
+            margin: 30px 0;
+            position: relative;
+        }
+        .spinner-container {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+            color: #6f42c1;
+        }
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+            font-weight: bold;
+            color: #666;
+        }
+        .file-list {
+            margin-top: 20px;
+        }
+        .file-item {
+            margin: 10px 0;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            background-color: white;
+            transition: all 0.3s ease;
+        }
+        .file-item:hover {
+            background-color: #f8f9fa;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .card {
+            border: none;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            margin-bottom: 60px;  /* Add space for fixed button */
+        }
+        .card-body {
+            padding: 30px;
+        }
+        .btn-outline-primary {
+            color: #6f42c1;
+            border-color: #6f42c1;
+        }
+        .btn-outline-primary:hover {
+            background-color: #6f42c1;
+            border-color: #6f42c1;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="text-center page-title">MediPriceInsight Data Dump Tool</h2>
+        <p class="text-center page-subtitle">Generate and download hospital data dumps</p>
+        
+        <div class="card">
+            <div class="card-body">
+                <div class="dump-buttons">
+                    <button id="addressDumpBtn" class="btn btn-dump" onclick="generateDump('hospital_address')">
+                        Generate Address Data Dump
+                    </button>
+                    <button id="chargesDumpBtn" class="btn btn-dump" onclick="generateDump('hospital_charges')">
+                        Generate Charges Data Dump
+                    </button>
+                </div>
+
+                <div class="spinner-container">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <div class="progress-text">Initializing...</div>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                             role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                    <div class="progress-text">0%</div>
+                </div>
+                
+                <div id="statusMessage" class="text-center mt-3"></div>
+
+                <div id="errorMessage" class="alert alert-danger"></div>
+
+                <div id="downloadSection" class="text-center">
+                    <h4 class="mb-4">Download Files</h4>
+                    <div id="fileList" class="file-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        function generateDump(table) {
+            // Disable buttons
+            $('.btn-dump').prop('disabled', true);
+            
+            // Show spinner and hide other elements
+            $('.spinner-container').show();
+            $('.progress-container').hide();
+            $('#errorMessage').hide();
+            $('#downloadSection').hide();
+            $('.progress-text').text('Initializing...');
+            
+            // Start dump generation
+            $.ajax({
+                url: `/generate-dump/${table}`,
+                method: 'POST',
+                success: function(response) {
+                    if (response.success) {
+                        monitorProgress(response.task_id);
+                    } else {
+                        showError(response.error);
+                    }
+                },
+                error: function(xhr) {
+                    showError('Failed to start dump generation: ' + 
+                            (xhr.responseJSON?.error || 'Unknown error'));
+                }
+            });
+        }
+
+        function monitorProgress(taskId) {
+            const progressCheck = setInterval(() => {
+                $.ajax({
+                    url: `/dump-progress/${taskId}`,
+                    method: 'GET',
+                    success: function(response) {
+                        if (response.success) {
+                            const progress = response.progress;
+                            const status = response.status;
+                            
+                            // Update progress display
+                            if (progress > 0) {
+                                $('.spinner-container').hide();
+                                $('.progress-container').show();
+                                $('.progress-bar').css('width', progress + '%').text(progress + '%');
+                                $('.progress-text').text(status);
+                            } else {
+                                $('.progress-text').text(status);
+                            }
+                            
+                            // Check if complete
+                            if (progress >= 100 || status === 'completed') {
+                                clearInterval(progressCheck);
+                                $('.progress-container').hide();
+                                $('.spinner-container').hide();
+                                $('#statusMessage').text('Dump generation completed successfully!');
+                                enableButtons();
+                                
+                                // Show download section
+                                $('#downloadSection').show();
+                                updateFileList();
+                            }
+                        }
+                    },
+                    error: function(xhr) {
+                        clearInterval(progressCheck);
+                        showError('Failed to check progress: ' + 
+                                (xhr.responseJSON?.error || 'Unknown error'));
+                    }
+                });
+            }, 1000);
+        }
+
+        function updateFileList() {
+            $.ajax({
+                url: '/get-download-files',
+                method: 'GET',
+                success: function(response) {
+                    if (response.success && response.files.length > 0) {
+                        const fileList = $('#fileList');
+                        fileList.empty();
+                        
+                        response.files.forEach(file => {
+                            const fileItem = $('<div>').addClass('file-item');
+                            const downloadLink = $('<a>')
+                                .attr('href', `/download/${file.filename}`)
+                                .attr('download', file.filename)
+                                .text(file.filename)
+                                .addClass('btn btn-outline-primary');
+                            
+                            const fileSize = $('<span>')
+                                .text(` (${formatFileSize(file.size)})`)
+                                .addClass('ms-2');
+                            
+                            fileItem.append(downloadLink).append(fileSize);
+                            fileList.append(fileItem);
+                        });
+                    }
+                }
+            });
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function showError(message) {
+            $('#errorMessage').text(message).show();
+            $('.spinner-container').hide();
+            $('.progress-container').hide();
+            enableButtons();
+        }
+
+        function enableButtons() {
+            $('.btn-dump').prop('disabled', false);
+        }
+    </script>
+</body>
+</html> 
