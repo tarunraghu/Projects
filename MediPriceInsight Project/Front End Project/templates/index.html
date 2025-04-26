@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospital Data Explorer</title>
+    <!-- Include jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Include jQuery UI -->
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.2/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.min.js"></script>
+    <!-- Add Select2 CSS and JS -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <!-- Add Chart.js for histograms -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary-color: #6a1b9a;
+            --primary-light: #9c4dcc;
+            --primary-dark: #38006b;
+            --secondary-color: #f3e5f5;
+            --text-color: #333;
+            --border-color: #e0e0e0;
+            --background-color: #fafafa;
+            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: var(--background-color);
+            color: var(--text-color);
+        }
+
+        .form-container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+            max-width: 1800px;
+            width: 100%;
+        }
+
+        h2 {
+            color: var(--primary-color);
+            margin-bottom: 25px;
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .filters-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+
+        .form-group {
+            flex: 1;
+            min-width: 250px;
+            max-width: 300px;
+        }
+
+        .optional-filters {
+            background-color: var(--secondary-color);
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 25px;
+            border: 1px solid var(--border-color);
+            max-width: 1800px;
+            width: 100%;
+        }
+
+        .optional-filters h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: var(--primary-dark);
+            font-size: 1.2em;
+            font-weight: 500;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--primary-dark);
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            box-sizing: border-box;
+            background-color: white;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        select:focus, input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary-light);
+        }
+
+        .ui-autocomplete {
+            max-height: 300px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            z-index: 1000;
+            border-radius: 6px;
+            box-shadow: var(--card-shadow);
+            border: 1px solid var(--border-color);
+        }
+
+        .ui-menu-item {
+            padding: 12px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .ui-menu-item:hover {
+            background-color: var(--secondary-color);
+        }
+
+        .report-button {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 25px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .report-button:hover {
+            background-color: var(--primary-light);
+            transform: translateY(-2px);
+        }
+
+        .report-button:disabled {
+            background-color: #BDBDBD;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .flash-messages {
+            margin-bottom: 25px;
+        }
+
+        .flash-message {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+
+        .flash-error {
+            background-color: #ffebee;
+            color: #c62828;
+            border: 1px solid #ffcdd2;
+        }
+
+        .flash-success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            border: 1px solid #c8e6c9;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 30px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--card-shadow);
+        }
+
+        .data-table th, .data-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+        }
+
+        .data-table tr:nth-child(even) {
+            background-color: var(--secondary-color);
+        }
+
+        .data-table tr:hover {
+            background-color: rgba(106, 27, 154, 0.05);
+        }
+
+        #loading {
+            display: none;
+            text-align: center;
+            padding: 30px;
+            color: var(--primary-color);
+            font-size: 18px;
+        }
+
+        #error-message {
+            display: none;
+            color: #c62828;
+            padding: 15px;
+            margin: 15px 0;
+            background-color: #ffebee;
+            border: 1px solid #ffcdd2;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+
+        .active-filters {
+            margin-top: 20px;
+            font-size: 0.9em;
+        }
+
+        .filter-tag {
+            display: inline-block;
+            background-color: var(--primary-light);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .search-help {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 6px;
+            font-style: italic;
+        }
+
+        .required {
+            color: #c62828;
+            font-weight: bold;
+        }
+
+        /* Add loading indicator styles */
+        .ui-autocomplete-loading {
+            background: white url('https://jqueryui.com/resources/demos/autocomplete/images/ui-anim_basic_16x16.gif') right center no-repeat;
+            background-size: 16px 16px;
+        }
+
+        .ui-menu-item div {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Loading screen styles */
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--background-color);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid var(--primary-light);
+            border-top: 5px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        .loading-text {
+            color: var(--primary-color);
+            font-size: 18px;
+            font-weight: 500;
+        }
+
+        .loading-progress {
+            margin-top: 10px;
+            color: var(--text-color);
+            font-size: 14px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .main-content {
+            display: none;
+        }
+
+        /* Add CSS for checkboxes in Select2 */
+        .select2-results__option .checkbox {
+            margin-right: 8px;
+        }
+        .select2-container--default .select2-selection--multiple .select2-selection__choice {
+            padding-left: 24px;
+            position: relative;
+        }
+
+        .data-table tbody {
+            display: block;
+            max-height: 500px;
+            height: 500px;
+            overflow-y: auto;
+            width: 100%;
+        }
+        .data-table thead, .data-table tbody tr {
+            display: table;
+            width: 100%;
+            table-layout: fixed;
+        }
+        .data-table th, .data-table td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .data-table th .sort-btn {
+            color: #fff !important;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0 4px;
+            font-size: 16px;
+        }
+        .data-table th span {
+            color: #fff !important;
+        }
+
+        .data-table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+        }
+        .data-table {
+            min-width: 1200px;
+            width: max-content;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading Hospital Data Explorer</div>
+        <div class="loading-progress">Initializing...</div>
+    </div>
+
+    <!-- Main Content (initially hidden) -->
+    <div class="main-content">
+        <div class="form-container">
+            <h2>Hospital Data Explorer</h2>
+            
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash-message flash-{{ category }}">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% endwith %}
+
+            <div class="filters-container">
+                <div class="form-group">
+                    <label for="code">Code(s): <span class="required">*</span></label>
+                    <select id="code" name="code" multiple style="width: 100%"></select>
+                    <div class="search-help">Select one or more codes</div>
+                </div>
+            </div>
+
+            <div class="optional-filters">
+                <h3>Optional Filters</h3>
+                <div class="filters-container">
+                    <div class="form-group">
+                        <label for="region">Region(s):</label>
+                        <select id="region" name="region" multiple style="width: 100%"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="city">City/Cities:</label>
+                        <select id="city" name="city" multiple style="width: 100%"></select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="active-filters" id="active-filters"></div>
+            
+            <button id="generate-report" class="report-button" disabled>Generate Report</button>
+        </div>
+
+        <div id="loading">Loading data...</div>
+        <div id="error-message"></div>
+        <div id="data-container">
+            <div class="data-table-wrapper">
+                <table class="data-table" id="hospital-data" style="display: none;">
+                    <thead>
+                        <tr id="table-headers"></tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            let currentRequest = null;
+            let codeOptions = [];
+            let regionOptions = [];
+            let cityOptions = [];
+            let chartObjects = {};
+            let currentSort = { column: null, direction: 'asc' };
+            let visibleChargeColumns = [];
+
+            // Add CSS for checkboxes in Select2
+            const style = document.createElement('style');
+            style.innerHTML = `
+            .select2-results__option .checkbox {
+                margin-right: 8px;
+            }
+            .select2-container--default .select2-selection--multiple .select2-selection__choice {
+                padding-left: 24px;
+                position: relative;
+            }
+            `;
+            document.head.appendChild(style);
+
+            // Only use formatOptionWithCheckbox for Select2 dropdowns (code, region, city)
+            function formatOptionWithCheckbox(option) {
+                if (!option.id) return option.text;
+                const checked = $(option.element).prop('selected');
+                const $container = $('<span></span>');
+                $container.append(
+                    $('<input type="checkbox" class="checkbox" style="pointer-events:none; margin-right:8px;">').prop('checked', checked)
+                );
+                $container.append(option.text);
+                return $container;
+            }
+
+            // Initialize Select2 for all multi-selects
+            $('#code').select2({
+                placeholder: "Select code(s)",
+                allowClear: true,
+                closeOnSelect: false,
+                templateResult: formatOptionWithCheckbox,
+                templateSelection: function(selection) {
+                    return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
+                }
+            });
+            $('#region').select2({
+                placeholder: "Select region(s)",
+                allowClear: true,
+                closeOnSelect: false,
+                templateResult: formatOptionWithCheckbox,
+                templateSelection: function(selection) {
+                    return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
+                }
+            });
+            $('#city').select2({
+                placeholder: "Select city/cities",
+                allowClear: true,
+                closeOnSelect: false,
+                templateResult: formatOptionWithCheckbox,
+                templateSelection: function(selection) {
+                    return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
+                }
+            });
+
+            // Function to load all initial data
+            function loadInitialData() {
+                return new Promise((resolve, reject) => {
+                    $('#loading-screen').show();
+                    $('.main-content').hide();
+                    $.get('/api/initial-data')
+                        .done(function(data) {
+                            // Populate code multi-select
+                            codeOptions = data.codes_and_descriptions.map(item => ({id: item.code, text: `${item.code} - ${item.description}`}));
+                            $('#code').empty();
+                            codeOptions.forEach(opt => $('#code').append(new Option(opt.text, opt.id)));
+                            // Populate region multi-select
+                            regionOptions = data.regions;
+                            $('#region').empty();
+                            regionOptions.forEach(region => $('#region').append(new Option(region, region)));
+                            // Populate city multi-select
+                            cityOptions = data.cities;
+                            $('#city').empty();
+                            cityOptions.forEach(city => $('#city').append(new Option(city, city)));
+                            setTimeout(() => {
+                                $('#loading-screen').fadeOut(500, function() {
+                                    $('.main-content').fadeIn(500);
+                                });
+                            }, 500);
+                            resolve();
+                        })
+                        .fail(function(error) {
+                            $('.loading-text').text('Error loading data. Please refresh the page.');
+                            $('.loading-progress').text('Error: ' + error.statusText);
+                            reject(error);
+                        });
+                });
+            }
+
+            // Load data when document is ready
+            loadInitialData().catch(function(error) {
+                console.error('Failed to load initial data:', error);
+            });
+
+            // Function to update active filters display
+            function updateActiveFilters() {
+                const activeFilters = [];
+                const city = $('#city').val();
+                const region = $('#region').val();
+                const code = $('#code').val();
+                if (code && code.length > 0) activeFilters.push(`Code(s): ${code.join(', ')}`);
+                if (region && region.length > 0) activeFilters.push(`Region(s): ${region.join(', ')}`);
+                if (city && city.length > 0) activeFilters.push(`City/Cities: ${city.join(', ')}`);
+                const container = $('#active-filters');
+                container.empty();
+                if (activeFilters.length > 0) {
+                    container.append('<strong>Active Filters: </strong>');
+                    activeFilters.forEach(filter => {
+                        container.append(`<span class="filter-tag">${filter}</span>`);
+                    });
+                }
+            }
+
+            // User-friendly column name mapping
+            const COLUMN_DISPLAY_NAMES = {
+                hospital_name: 'Hospital Name',
+                code: 'Code',
+                description: 'Description',
+                city: 'City',
+                region: 'Region',
+                payer_name: 'Payer Name',
+                plan_name: 'Plan Name'
+            };
+
+            // Function to fetch and display data
+            function fetchData() {
+                const codes = $('#code').val();
+                const regions = $('#region').val();
+                const cities = $('#city').val();
+                if (!codes || codes.length === 0) {
+                    $('#hospital-data').hide();
+                    return;
+                }
+                if (currentRequest) currentRequest.abort();
+                const params = new URLSearchParams();
+                codes.forEach(c => params.append('code', c));
+                regions && regions.forEach(r => params.append('region', r));
+                cities && cities.forEach(c => params.append('city', c));
+                const table = document.getElementById('hospital-data');
+                const loading = document.getElementById('loading');
+                const errorMessage = document.getElementById('error-message');
+                loading.style.display = 'block';
+                table.style.display = 'none';
+                errorMessage.style.display = 'none';
+                currentRequest = $.ajax({
+                    url: `/get_data?${params.toString()}`,
+                    method: 'GET',
+                    success: function(data) {
+                        if (data.error) throw new Error(data.error);
+                        // Clear existing table content
+                        const headerRow = document.getElementById('table-headers');
+                        const tableBody = document.getElementById('table-body');
+                        headerRow.innerHTML = '';
+                        tableBody.innerHTML = '';
+                        // Add headers
+                        const filteredColumns = data.columns.filter(col => {
+                            return COLUMN_DISPLAY_NAMES[col] !== undefined;
+                        });
+                        filteredColumns.forEach(column => {
+                            const th = document.createElement('th');
+                            th.style.cursor = 'pointer';
+                            let displayName = COLUMN_DISPLAY_NAMES[column] || column;
+                            let sortArrow = '';
+                            if (currentSort.column === column) {
+                                sortArrow = currentSort.direction === 'asc' ? ' \u25B2' : ' \u25BC';
+                            }
+                            th.innerHTML = `<span>${displayName}${sortArrow}</span> <button class="sort-btn" data-col="${column}" style="background:none;border:none;cursor:pointer;padding:0 4px;">⇅</button>`;
+                            headerRow.appendChild(th);
+                        });
+                        // Add event listener for sort buttons after rendering headers
+                        Array.from(headerRow.querySelectorAll('.sort-btn')).forEach(btn => {
+                            btn.onclick = function(e) {
+                                const col = btn.getAttribute('data-col');
+                                if (currentSort.column === col) {
+                                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                                } else {
+                                    currentSort.column = col;
+                                    currentSort.direction = 'asc';
+                                }
+                                renderTableRows(filteredColumns, data.data);
+                                // Re-render headers to update sort arrow
+                                fetchData.lastData = data;
+                                renderTableHeaders(filteredColumns);
+                            };
+                        });
+                        // Helper to render table rows with sorting
+                        function renderTableRows(columns, rows) {
+                            const tableBody = document.getElementById('table-body');
+                            tableBody.innerHTML = '';
+                            let sortedRows = [...rows];
+                            if (currentSort.column) {
+                                sortedRows.sort((a, b) => {
+                                    let v1 = a[currentSort.column];
+                                    let v2 = b[currentSort.column];
+                                    if (typeof v1 === 'number' && typeof v2 === 'number') {
+                                        return currentSort.direction === 'asc' ? v1 - v2 : v2 - v1;
+                                    }
+                                    v1 = v1 ? v1.toString().toLowerCase() : '';
+                                    v2 = v2 ? v2.toString().toLowerCase() : '';
+                                    if (v1 < v2) return currentSort.direction === 'asc' ? -1 : 1;
+                                    if (v1 > v2) return currentSort.direction === 'asc' ? 1 : -1;
+                                    return 0;
+                                });
+                            }
+                            sortedRows.slice(0, 20).forEach(row => {
+                                const tr = document.createElement('tr');
+                                columns.forEach(column => {
+                                    const td = document.createElement('td');
+                                    td.textContent = row[column] || '';
+                                    tr.appendChild(td);
+                                });
+                                tableBody.appendChild(tr);
+                            });
+                        }
+                        // Helper to render table headers (for sort arrow update)
+                        function renderTableHeaders(columns) {
+                            const headerRow = document.getElementById('table-headers');
+                            headerRow.innerHTML = '';
+                            columns.forEach(column => {
+                                const th = document.createElement('th');
+                                th.style.cursor = 'pointer';
+                                let displayName = COLUMN_DISPLAY_NAMES[column] || column;
+                                let sortArrow = '';
+                                if (currentSort.column === column) {
+                                    sortArrow = currentSort.direction === 'asc' ? ' \u25B2' : ' \u25BC';
+                                }
+                                th.innerHTML = `<span>${displayName}${sortArrow}</span> <button class="sort-btn" data-col="${column}" style="background:none;border:none;cursor:pointer;padding:0 4px;">⇅</button>`;
+                                headerRow.appendChild(th);
+                            });
+                            Array.from(headerRow.querySelectorAll('.sort-btn')).forEach(btn => {
+                                btn.onclick = function(e) {
+                                    const col = btn.getAttribute('data-col');
+                                    if (currentSort.column === col) {
+                                        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                                    } else {
+                                        currentSort.column = col;
+                                        currentSort.direction = 'asc';
+                                    }
+                                    renderTableRows(fetchData.lastData.columns, fetchData.lastData.data);
+                                    renderTableHeaders(fetchData.lastData.columns);
+                                };
+                            });
+                        }
+                        // In fetchData, after data is loaded:
+                        fetchData.lastData = data;
+                        renderTableRows(filteredColumns, data.data);
+                        renderTableHeaders(filteredColumns);
+                        // Show table, hide loading
+                        table.style.display = 'table';
+                        loading.style.display = 'none';
+                        updateActiveFilters();
+                    },
+                    error: function(xhr, status, error) {
+                        if (status !== 'abort') {
+                            errorMessage.textContent = 'Error loading data: ' + error;
+                            errorMessage.style.display = 'block';
+                            loading.style.display = 'none';
+                        }
+                    },
+                    complete: function() { currentRequest = null; }
+                });
+            }
+
+            // Helper to update region options based on selected codes
+            function updateRegionOptions(selectedCodes) {
+                $.get('/api/initial-data')
+                    .done(function(data) {
+                        let filteredRegions = data.regions;
+                        if (selectedCodes && selectedCodes.length > 0) {
+                            // Filter regions based on selected codes
+                            $.get('/get_data?' + selectedCodes.map(c => 'code=' + encodeURIComponent(c)).join('&'), function(result) {
+                                const regionSet = new Set(result.data.map(row => row.region));
+                                filteredRegions = data.regions.filter(r => regionSet.has(r));
+                                $('#region').empty();
+                                filteredRegions.forEach(region => $('#region').append(new Option(region, region)));
+                                $('#region').trigger('change.select2');
+                            });
+                        } else {
+                            $('#region').empty();
+                            data.regions.forEach(region => $('#region').append(new Option(region, region)));
+                            $('#region').trigger('change.select2');
+                        }
+                    });
+            }
+            // Helper to update city options based on selected codes and regions
+            function updateCityOptions(selectedCodes, selectedRegions) {
+                $.get('/api/initial-data')
+                    .done(function(data) {
+                        let filteredCities = data.cities;
+                        if ((selectedCodes && selectedCodes.length > 0) || (selectedRegions && selectedRegions.length > 0)) {
+                            let params = [];
+                            if (selectedCodes && selectedCodes.length > 0) params = params.concat(selectedCodes.map(c => 'code=' + encodeURIComponent(c)));
+                            if (selectedRegions && selectedRegions.length > 0) params = params.concat(selectedRegions.map(r => 'region=' + encodeURIComponent(r)));
+                            $.get('/get_data?' + params.join('&'), function(result) {
+                                const citySet = new Set(result.data.map(row => row.city));
+                                filteredCities = data.cities.filter(c => citySet.has(c));
+                                $('#city').empty();
+                                filteredCities.forEach(city => $('#city').append(new Option(city, city)));
+                                $('#city').trigger('change.select2');
+                            });
+                        } else {
+                            $('#city').empty();
+                            data.cities.forEach(city => $('#city').append(new Option(city, city)));
+                            $('#city').trigger('change.select2');
+                        }
+                    });
+            }
+            // On code change, update region and city options
+            $('#code').on('change', function() {
+                const selectedCodes = $(this).val();
+                updateRegionOptions(selectedCodes);
+                updateCityOptions(selectedCodes, $('#region').val());
+                fetchData();
+            });
+            // On region change, update city options
+            $('#region').on('change', function() {
+                const selectedCodes = $('#code').val();
+                const selectedRegions = $(this).val();
+                updateCityOptions(selectedCodes, selectedRegions);
+                fetchData();
+            });
+            // On city change, just fetch data
+            $('#city').on('change', fetchData);
+
+            // Generate Report button click handler
+            $('#generate-report').on('click', function() {
+                const codes = $('#code').val();
+                const regions = $('#region').val();
+                const cities = $('#city').val();
+                const params = new URLSearchParams();
+                codes.forEach(c => params.append('code', c));
+                regions.forEach(r => params.append('region', r));
+                cities.forEach(c => params.append('city', c));
+                // Create a temporary link to trigger the download
+                const link = document.createElement('a');
+                link.href = `/generate_report?${params.toString()}`;
+                link.download = `hospital_report.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+
+            // In JS, track which charge columns are selected
+            $('.charge-col-toggle').on('change', function() {
+                visibleChargeColumns = $('.charge-col-toggle:checked').map(function() { return this.value; }).get();
+                fetchData();
+            });
+        });
+    </script>
+</body>
+</html> 

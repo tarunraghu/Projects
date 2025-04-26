@@ -11,7 +11,8 @@ import math
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'downloads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-TARGET_FILE_SIZE = 1024 * 1024 * 1024  # 1GB in bytes
+TARGET_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB in bytes
+CHUNK_SIZE = 5000  # Increased chunk size for better performance
 
 # Database configuration
 DB_CONFIG = {
@@ -64,11 +65,11 @@ def generate_dump_file(table_name, task_id):
             cur.execute(f"SELECT COUNT(*) FROM {table_name}")
             total_rows = cur.fetchone()[0]
             
-            # For hospital_charges, split into multiple files
-            if table_name == 'hospital_charges':
+            # For hospital_charges_cleaned, split into multiple files
+            if table_name == 'hospital_charges_cleaned':
                 # Estimate row size
                 avg_row_size = estimate_row_size(cur, table_name)
-                rows_per_file = int(TARGET_FILE_SIZE / avg_row_size)
+                rows_per_file = max(int(TARGET_FILE_SIZE / avg_row_size), total_rows // 3)  # Ensure at least 3 parts
                 total_files = math.ceil(total_rows / rows_per_file)
                 
                 # Get column names
@@ -99,9 +100,8 @@ def generate_dump_file(table_name, task_id):
                             LIMIT {rows_to_process}
                         """)
                         
-                        chunk_size = 1000
                         while True:
-                            rows = cur.fetchmany(chunk_size)
+                            rows = cur.fetchmany(CHUNK_SIZE)
                             if not rows:
                                 break
                                 
@@ -109,10 +109,11 @@ def generate_dump_file(table_name, task_id):
                                 writer.writerow([str(val) if val is not None else '' for val in row])
                                 processed_rows += 1
                                 
-                                # Update progress
-                                progress = int((processed_rows / total_rows) * 100)
-                                active_tasks[task_id]['progress'] = progress
-                                active_tasks[task_id]['status'] = f'Processing part {current_file} of {total_files}... {progress}%'
+                                # Update progress less frequently for better performance
+                                if processed_rows % 1000 == 0:
+                                    progress = int((processed_rows / total_rows) * 100)
+                                    active_tasks[task_id]['progress'] = progress
+                                    active_tasks[task_id]['status'] = f'Processing part {current_file} of {total_files}... {progress}%'
                     
                     current_file += 1
                 
@@ -130,7 +131,6 @@ def generate_dump_file(table_name, task_id):
                 headers = [desc[0] for desc in cur.description]
                 
                 processed_rows = 0
-                chunk_size = 1000
                 
                 with open(filepath, 'w', newline='') as csvfile:
                     writer = csv.writer(csvfile)
@@ -141,7 +141,7 @@ def generate_dump_file(table_name, task_id):
                             SELECT * FROM {table_name}
                             ORDER BY id
                             OFFSET {processed_rows} 
-                            LIMIT {chunk_size}
+                            LIMIT {CHUNK_SIZE}
                         """)
                         rows = cur.fetchall()
                         
@@ -149,10 +149,11 @@ def generate_dump_file(table_name, task_id):
                             writer.writerow([str(val) if val is not None else '' for val in row])
                             processed_rows += 1
                             
-                            # Update progress
-                            progress = int((processed_rows / total_rows) * 100)
-                            active_tasks[task_id]['progress'] = progress
-                            active_tasks[task_id]['status'] = f'Processing... {progress}%'
+                            # Update progress less frequently
+                            if processed_rows % 1000 == 0:
+                                progress = int((processed_rows / total_rows) * 100)
+                                active_tasks[task_id]['progress'] = progress
+                                active_tasks[task_id]['status'] = f'Processing... {progress}%'
                         
                         if not rows:  # No more rows to process
                             break
@@ -173,7 +174,7 @@ def generate_dump_file(table_name, task_id):
 
 @app.route('/generate-dump/<table>', methods=['POST'])
 def generate_dump(table):
-    if table not in ['hospital_address', 'hospital_charges']:
+    if table not in ['hospital_address', 'hospital_charges_cleaned']:
         return jsonify({'success': False, 'error': 'Invalid table name'}), 400
     
     task_id = str(uuid.uuid4())
