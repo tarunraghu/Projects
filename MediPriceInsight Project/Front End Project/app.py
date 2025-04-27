@@ -90,223 +90,6 @@ class DataCache:
 # Initialize cache
 data_cache = DataCache()
 
-# Prepared statements
-def init_prepared_statements(conn):
-    """Initialize prepared statements for frequently used queries"""
-    try:
-        with conn.cursor() as cur:
-            # Drop existing prepared statements if they exist
-            cur.execute("""
-                DEALLOCATE ALL;
-            """)
-            
-            # Cities query
-            cur.execute("""
-                PREPARE get_cities AS
-                SELECT DISTINCT city 
-                FROM public.hospital_dataset 
-                WHERE city IS NOT NULL 
-                ORDER BY city;
-            """)
-            
-            # Regions query
-            cur.execute("""
-                PREPARE get_regions AS
-                SELECT DISTINCT region 
-                FROM public.hospital_dataset 
-                WHERE region IS NOT NULL 
-                ORDER BY region;
-            """)
-            
-            # Codes and descriptions query
-            cur.execute("""
-                PREPARE get_codes_descriptions AS
-                SELECT DISTINCT code, description
-                FROM public.hospital_dataset 
-                ORDER BY code;
-            """)
-            
-            # Cities by region query
-            cur.execute("""
-                PREPARE get_cities_by_region AS
-                SELECT DISTINCT city 
-                FROM public.hospital_dataset 
-                WHERE region = $1 AND city IS NOT NULL 
-                ORDER BY city;
-            """)
-            
-            # Search query
-            cur.execute("""
-                PREPARE search_codes AS
-                SELECT DISTINCT code, description
-                FROM public.hospital_dataset 
-                WHERE code ILIKE $1 OR description ILIKE $2
-                ORDER BY code
-                LIMIT 10;
-            """)
-            
-            # Hospital data query
-            cur.execute("""
-                PREPARE get_hospital_data AS
-                SELECT * FROM public.hospital_dataset 
-                WHERE code = $1
-                AND ($2::text IS NULL OR city = $2)
-                AND ($3::text IS NULL OR region = $3)
-                ORDER BY hospital_name;
-            """)
-            
-            conn.commit()
-            print("Prepared statements created successfully")
-    except Exception as e:
-        print(f"Error preparing statements: {e}")
-        conn.rollback()
-        raise
-
-def create_stored_procedures(conn):
-    """Create stored procedures for optimized data access"""
-    try:
-        with conn.cursor() as cur:
-            # Remove dropping of existing procedures
-            # Only create if not exists
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION get_distinct_cities()
-                RETURNS TABLE (city text)
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT DISTINCT "city" 
-                    FROM public.hospital_dataset 
-                    WHERE "city" IS NOT NULL 
-                    ORDER BY "city";
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION get_distinct_regions()
-                RETURNS TABLE (region text)
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT DISTINCT "region" 
-                    FROM public.hospital_dataset 
-                    WHERE "region" IS NOT NULL 
-                    ORDER BY "region";
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION get_cities_for_region(p_region text)
-                RETURNS TABLE (city text)
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT DISTINCT "city" 
-                    FROM public.hospital_dataset 
-                    WHERE "region" = p_region AND "city" IS NOT NULL 
-                    ORDER BY "city";
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION get_codes_and_descriptions()
-                RETURNS TABLE (code text, description text)
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT DISTINCT "code", "description"
-                    FROM public.hospital_dataset 
-                    ORDER BY "code";
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION search_codes_and_descriptions(p_search_term text)
-                RETURNS TABLE (code text, description text)
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT DISTINCT "code", "description"
-                    FROM public.hospital_dataset 
-                    WHERE "code" ILIKE '%' || p_search_term || '%' 
-                       OR "description" ILIKE '%' || p_search_term || '%'
-                    ORDER BY "code"
-                    LIMIT 10;
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION get_hospital_data(
-                    p_code text,
-                    p_city text DEFAULT NULL,
-                    p_region text DEFAULT NULL
-                )
-                RETURNS TABLE (
-                    code text,
-                    description text,
-                    city text,
-                    region text,
-                    hospital_name text,
-                    price numeric
-                )
-                AS $$
-                BEGIN
-                    RETURN QUERY
-                    SELECT 
-                        h."code",
-                        h."description",
-                        h."city",
-                        h."region",
-                        h."hospital_name",
-                        h."price"
-                    FROM public.hospital_dataset h
-                    WHERE h."code" = p_code
-                    AND (p_city IS NULL OR h."city" = p_city)
-                    AND (p_region IS NULL OR h."region" = p_region)
-                    ORDER BY h."hospital_name";
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            conn.commit()
-            print("Stored procedures created successfully")
-    except Exception as e:
-        print(f"Error creating stored procedures: {e}")
-        conn.rollback()
-        raise
-
-def init_app():
-    """Initialize the application before first request"""
-    global _initialized
-    if not _initialized:
-        conn = get_db_connection()
-        if conn:
-            try:
-                # First create stored procedures
-                create_stored_procedures(conn)
-                print("Stored procedures created successfully")
-                
-                # Then create prepared statements
-                init_prepared_statements(conn)
-                print("Prepared statements created successfully")
-                
-                # Verify prepared statements exist
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT name FROM pg_prepared_statements;
-                    """)
-                    prepared_statements = [row[0] for row in cur.fetchall()]
-                    print("Available prepared statements:", prepared_statements)
-                
-                _initialized = True
-                print("Application initialized successfully")
-            except Exception as e:
-                print(f"Error initializing application: {e}")
-                _initialized = False
-            finally:
-                release_db_connection(conn)
-        else:
-            print("Failed to get database connection for initialization")
-            _initialized = False
-
 @app.before_request
 def before_request():
     """Initialize the application before each request if not already initialized"""
@@ -326,7 +109,7 @@ def get_cities():
             return []
         
         with conn.cursor() as cur:
-            cur.execute("EXECUTE get_cities")
+            cur.execute("SELECT * FROM get_distinct_cities();")
             cities = [row[0] for row in cur.fetchall()]
         
         data_cache.set(cache_key, cities)
@@ -350,7 +133,7 @@ def get_regions():
             return []
         
         with conn.cursor() as cur:
-            cur.execute("EXECUTE get_regions")
+            cur.execute("SELECT * FROM get_distinct_regions();")
             regions = [row[0] for row in cur.fetchall()]
         
         data_cache.set(cache_key, regions)
@@ -374,7 +157,7 @@ def get_all_codes_and_descriptions():
             return []
         
         with conn.cursor() as cur:
-            cur.execute("EXECUTE get_codes_descriptions")
+            cur.execute("SELECT * FROM get_codes_and_descriptions();")
             results = cur.fetchall()
             matches = [{"code": row[0], "description": row[1]} for row in results]
         
@@ -399,7 +182,7 @@ def get_cities_by_region(region):
             return []
         
         with conn.cursor() as cur:
-            cur.execute("EXECUTE get_cities_by_region(%s)", (region,))
+            cur.execute("SELECT * FROM get_cities_for_region(%s);", (region,))
             cities = [row[0] for row in cur.fetchall()]
         
         data_cache.set(cache_key, cities)
@@ -456,7 +239,7 @@ def get_hospital_data_by_code(code, city=None, region=None):
             return None
         
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("EXECUTE get_hospital_data(%s, %s, %s)", (code, city, region))
+            cur.execute("SELECT * FROM get_hospital_data(%s, %s, %s);", (code, city, region))
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             data = {'columns': columns, 'data': [dict(row) for row in rows]}
@@ -465,63 +248,6 @@ def get_hospital_data_by_code(code, city=None, region=None):
         return data
     except Exception as e:
         print(f"Error fetching hospital data: {str(e)}")
-        return None
-    finally:
-        release_db_connection(conn)
-
-def get_hospital_data_multi(code_list=None, city_list=None, region_list=None):
-    """Fetch hospital data filtered by multiple codes, cities, and regions. Also compute column summaries."""
-    cache_key = f"hospital_data_multi_{'_'.join(code_list or [])}_{'_'.join(city_list or [])}_{'_'.join(region_list or [])}"
-    if data_cache.is_valid(cache_key):
-        return data_cache.get(cache_key)['value']
-    try:
-        conn = get_db_connection()
-        if conn is None:
-            return None
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            wheres = []
-            params = []
-            if code_list:
-                wheres.append(f"code = ANY(%s)")
-                params.append(code_list)
-            if city_list:
-                wheres.append(f"city = ANY(%s)")
-                params.append(city_list)
-            if region_list:
-                wheres.append(f"region = ANY(%s)")
-                params.append(region_list)
-            where_clause = f"WHERE {' AND '.join(wheres)}" if wheres else ''
-            sql = f"SELECT * FROM public.hospital_dataset {where_clause} ORDER BY hospital_name;"
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
-            data_rows = [dict(row) for row in rows]
-            # Compute column summaries
-            summaries = {}
-            arr = {col: [row[col] for row in data_rows] for col in columns} if data_rows else {col: [] for col in columns}
-            for col in columns:
-                col_data = arr[col]
-                # Numeric columns: histogram
-                if all(isinstance(x, (int, float, np.integer, np.floating)) or x is None for x in col_data):
-                    clean_data = [x for x in col_data if x is not None]
-                    if clean_data:
-                        hist, bin_edges = np.histogram(clean_data, bins=10)
-                        summaries[col] = {
-                            'histogram': hist.tolist(),
-                            'bin_edges': bin_edges.tolist(),
-                            'unique_count': len(set(clean_data))
-                        }
-                    else:
-                        summaries[col] = {'histogram': [], 'bin_edges': [], 'unique_count': 0}
-                else:
-                    # Categorical columns: unique count
-                    clean_data = [x for x in col_data if x is not None]
-                    summaries[col] = {'unique_count': len(set(clean_data))}
-            data = {'columns': columns, 'data': data_rows, 'summaries': summaries}
-        data_cache.set(cache_key, data)
-        return data
-    except Exception as e:
-        print(f"Error fetching hospital data (multi): {str(e)}")
         return None
     finally:
         release_db_connection(conn)
@@ -555,10 +281,30 @@ def get_initial_data():
             raise ValueError("No codes and descriptions found in database")
         print(f"Fetched {len(codes_and_descriptions)} codes and descriptions")
         
+        # Get payer names
+        conn = get_db_connection()
+        payer_names = []
+        plan_names = []
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT * FROM get_distinct_payer_names();")
+                    payer_names = [row[0] for row in cur.fetchall()]
+                    cur.execute("SELECT * FROM get_distinct_plan_names();")
+                    plan_names = [row[0] for row in cur.fetchall()]
+                print(f"Fetched {len(payer_names)} payer names")
+                print(f"Fetched {len(plan_names)} plan names")
+            except Exception as e:
+                print(f"Error fetching payer names: {str(e)}")
+            finally:
+                release_db_connection(conn)
+
         return jsonify({
             'cities': cities,
             'regions': regions,
-            'codes_and_descriptions': codes_and_descriptions
+            'codes_and_descriptions': codes_and_descriptions,
+            'payer_names': payer_names,
+            'plan_names': plan_names
         })
     except Exception as e:
         print(f"Error fetching initial data: {str(e)}")
@@ -566,7 +312,9 @@ def get_initial_data():
             'error': str(e),
             'cities': [],
             'regions': [],
-            'codes_and_descriptions': []
+            'codes_and_descriptions': [],
+            'payer_names': [],
+            'plan_names': []
         }), 500
 
 @app.route('/search')
@@ -593,11 +341,17 @@ def get_data_multi():
         code_list = request.args.getlist('code')
         city_list = request.args.getlist('city')
         region_list = request.args.getlist('region')
+        payer_name_list = request.args.getlist('payer_name')
+        plan_name_list = request.args.getlist('plan_name')
         # If any are empty or 'all', treat as no filter
         code_list = [c for c in code_list if c and c != 'all']
         city_list = [c for c in city_list if c and c != 'all']
         region_list = [r for r in region_list if r and r != 'all']
-        data = get_hospital_data_multi(code_list or None, city_list or None, region_list or None)
+        payer_name_list = [p for p in payer_name_list if p and p != 'all']
+        plan_name_list = [p for p in plan_name_list if p and p != 'all']
+        data = get_hospital_data_multi(
+            code_list or None, city_list or None, region_list or None, payer_name_list or None, plan_name_list or None
+        )
         if data:
             return jsonify(data)
         return jsonify({'error': 'Failed to fetch data'}), 500
@@ -641,6 +395,156 @@ def generate_report_multi():
     except Exception as e:
         print(f"Error generating report: {str(e)}")
         return jsonify({'error': 'Failed to generate report'}), 500
+
+def get_hospital_data_multi(code_list=None, city_list=None, region_list=None, payer_name_list=None, plan_name_list=None):
+    """Fetch hospital data filtered by multiple codes, cities, regions, payer names, and plan names. Also compute column summaries."""
+    cache_key = f"hospital_data_multi_{'_'.join(code_list or [])}_{'_'.join(city_list or [])}_{'_'.join(region_list or [])}_{'_'.join(payer_name_list or [])}_{'_'.join(plan_name_list or [])}"
+    if data_cache.is_valid(cache_key):
+        return data_cache.get(cache_key)['value']
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            wheres = []
+            params = []
+            if code_list:
+                wheres.append(f"code = ANY(%s)")
+                params.append(code_list)
+            if city_list:
+                wheres.append(f"city = ANY(%s)")
+                params.append(city_list)
+            if region_list:
+                wheres.append(f"region = ANY(%s)")
+                params.append(region_list)
+            if payer_name_list:
+                wheres.append(f"payer_name = ANY(%s)")
+                params.append(payer_name_list)
+            if plan_name_list:
+                wheres.append(f"plan_name = ANY(%s)")
+                params.append(plan_name_list)
+            where_clause = f"WHERE {' AND '.join(wheres)}" if wheres else ''
+            sql = f"SELECT * FROM public.hospital_dataset {where_clause} ORDER BY hospital_name;"
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            data_rows = [dict(row) for row in rows]
+            # Compute column summaries
+            summaries = {}
+            arr = {col: [row[col] for row in data_rows] for col in columns} if data_rows else {col: [] for col in columns}
+            for col in columns:
+                col_data = arr[col]
+                # Numeric columns: histogram
+                if all(isinstance(x, (int, float, np.integer, np.floating)) or x is None for x in col_data):
+                    clean_data = [x for x in col_data if x is not None]
+                    if clean_data:
+                        hist, bin_edges = np.histogram(clean_data, bins=10)
+                        summaries[col] = {
+                            'histogram': hist.tolist(),
+                            'bin_edges': bin_edges.tolist(),
+                            'unique_count': len(set(clean_data))
+                        }
+                    else:
+                        summaries[col] = {'histogram': [], 'bin_edges': [], 'unique_count': 0}
+                else:
+                    # Categorical columns: unique count
+                    clean_data = [x for x in col_data if x is not None]
+                    summaries[col] = {'unique_count': len(set(clean_data))}
+            data = {'columns': columns, 'data': data_rows, 'summaries': summaries}
+        data_cache.set(cache_key, data)
+        return data
+    except Exception as e:
+        print(f"Error fetching hospital data (multi): {str(e)}")
+        return None
+    finally:
+        release_db_connection(conn)
+
+@app.route('/api/filter-options')
+def get_filter_options():
+    """API endpoint to get valid filter options for cascading dropdowns based on current selections, including counts for each option."""
+    try:
+        code_list = request.args.getlist('code')
+        region_list = request.args.getlist('region')
+        city_list = request.args.getlist('city')
+        payer_name_list = request.args.getlist('payer_name')
+        plan_name_list = request.args.getlist('plan_name')
+        code_list = [c for c in code_list if c and c != 'all']
+        region_list = [r for r in region_list if r and r != 'all']
+        city_list = [c for c in city_list if c and c != 'all']
+        payer_name_list = [p for p in payer_name_list if p and p != 'all']
+        plan_name_list = [p for p in plan_name_list if p and p != 'all']
+        conn = get_db_connection()
+        if conn is None:
+            return jsonify({'regions': [], 'cities': [], 'payer_names': [], 'plan_names': []})
+        with conn.cursor() as cur:
+            wheres = []
+            params = []
+            if code_list:
+                wheres.append("code = ANY(%s)")
+                params.append(code_list)
+            if region_list:
+                wheres.append("region = ANY(%s)")
+                params.append(region_list)
+            if city_list:
+                wheres.append("city = ANY(%s)")
+                params.append(city_list)
+            if payer_name_list:
+                wheres.append("payer_name = ANY(%s)")
+                params.append(payer_name_list)
+            if plan_name_list:
+                wheres.append("plan_name = ANY(%s)")
+                params.append(plan_name_list)
+            where_clause = f"WHERE {' AND '.join(wheres)}" if wheres else ''
+            # Get filtered regions with counts
+            cur.execute(f"SELECT region, COUNT(*) FROM public.hospital_dataset {where_clause} GROUP BY region ORDER BY region;", params)
+            regions = [{"name": row[0], "count": row[1]} for row in cur.fetchall() if row[0]]
+            # Get filtered cities with counts
+            print(f"SQL for cities: SELECT city, COUNT(*) FROM public.hospital_dataset {where_clause} GROUP BY city ORDER BY city;")
+            print(f"Params: {params}")
+            cur.execute(f"SELECT city, COUNT(*) FROM public.hospital_dataset {where_clause} GROUP BY city ORDER BY city;", params)
+            cities = [{"name": row[0], "count": row[1]} for row in cur.fetchall() if row[0]]
+            # Get filtered payer_names with counts
+            cur.execute(f"SELECT payer_name, COUNT(*) FROM public.hospital_dataset {where_clause} GROUP BY payer_name ORDER BY payer_name;", params)
+            payer_names = [{"name": row[0], "count": row[1]} for row in cur.fetchall() if row[0]]
+            # Get filtered plan_names with counts
+            cur.execute(f"SELECT plan_name, COUNT(*) FROM public.hospital_dataset {where_clause} GROUP BY plan_name ORDER BY plan_name;", params)
+            plan_names = [{"name": row[0], "count": row[1]} for row in cur.fetchall() if row[0]]
+        release_db_connection(conn)
+        return jsonify({
+            'regions': regions,
+            'cities': cities,
+            'payer_names': payer_names,
+            'plan_names': plan_names
+        })
+    except Exception as e:
+        print(f"Error in get_filter_options endpoint: {str(e)}")
+        return jsonify({'regions': [], 'cities': [], 'payer_names': [], 'plan_names': []}), 500
+
+def init_app():
+    """Initialize the application before first request"""
+    global _initialized
+    if not _initialized:
+        conn = get_db_connection()
+        if conn:
+            try:
+                # Verify prepared statements exist
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT name FROM pg_prepared_statements;
+                    """)
+                    prepared_statements = [row[0] for row in cur.fetchall()]
+                    print("Available prepared statements:", prepared_statements)
+                
+                _initialized = True
+                print("Application initialized successfully")
+            except Exception as e:
+                print(f"Error initializing application: {e}")
+                _initialized = False
+            finally:
+                release_db_connection(conn)
+        else:
+            print("Failed to get database connection for initialization")
+            _initialized = False
 
 if __name__ == '__main__':
     app.run(debug=True) 

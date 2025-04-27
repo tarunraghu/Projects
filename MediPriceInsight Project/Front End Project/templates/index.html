@@ -186,19 +186,42 @@
         }
 
         .data-table th, .data-table td {
-            padding: 15px;
+            padding: 10px;
             text-align: left;
             border-bottom: 1px solid var(--border-color);
+            white-space: normal;
+            word-wrap: break-word;
+        }
+        /* Specific column widths for readability */
+        .data-table th:nth-child(1), .data-table td:nth-child(1) { width: 220px; min-width: 220px; max-width: 220px; } /* Hospital Name */
+        .data-table th:nth-child(2), .data-table td:nth-child(2) { width: 90px; min-width: 90px; max-width: 90px; }   /* Code */
+        .data-table th:nth-child(3), .data-table td:nth-child(3) { width: 250px; min-width: 250px; max-width: 250px; } /* Description */
+        .data-table th:nth-child(4), .data-table td:nth-child(4) { width: 120px; min-width: 120px; max-width: 120px; } /* City */
+        .data-table th:nth-child(5), .data-table td:nth-child(5) { width: 120px; min-width: 120px; max-width: 120px; } /* Region */
+        .data-table th:nth-child(6), .data-table td:nth-child(6) { width: 150px; min-width: 150px; max-width: 150px; } /* Payer Name */
+        .data-table th:nth-child(7), .data-table td:nth-child(7) { width: 150px; min-width: 150px; max-width: 150px; } /* Plan Name */
+        .data-table th:nth-child(8), .data-table td:nth-child(8) { width: 120px; min-width: 120px; max-width: 120px; } /* Min Charge */
+        .data-table th:nth-child(9), .data-table td:nth-child(9) { width: 120px; min-width: 120px; max-width: 120px; } /* Max Charge */
+        .data-table th:nth-child(10), .data-table td:nth-child(10) { width: 120px; min-width: 120px; max-width: 120px; } /* Gross Charge */
+        .data-table th:nth-child(11), .data-table td:nth-child(11) { width: 90px; min-width: 90px; max-width: 90px; } /* Negotiated Charge */
+        /* Zebra striping for rows */
+        .data-table tr:nth-child(even) {
+            background-color: #f3e5f5;
+        }
+        .data-table tr:nth-child(odd) {
+            background-color: #fff;
+        }
+        .data-table th, .data-table td {
+            border-right: 1px solid #e0e0e0;
+        }
+        .data-table th:last-child, .data-table td:last-child {
+            border-right: none;
         }
 
         .data-table th {
             background-color: var(--primary-color);
             color: white;
             font-weight: 600;
-        }
-
-        .data-table tr:nth-child(even) {
-            background-color: var(--secondary-color);
         }
 
         .data-table tr:hover {
@@ -352,10 +375,75 @@
         .data-table-wrapper {
             width: 100%;
             overflow-x: auto;
+            overflow-y: auto;
+            max-width: 100vw;
+            margin: 0 auto;
+            max-height: 600px;
         }
         .data-table {
-            min-width: 1200px;
             width: max-content;
+            min-width: 1550px;
+            border-collapse: collapse;
+            border-spacing: 0;
+        }
+        .data-table tbody {
+            display: block;
+            max-height: 500px;
+            overflow-y: auto;
+            width: 100%;
+        }
+        .data-table thead, .data-table tbody tr {
+            display: table;
+            width: 100%;
+            table-layout: fixed;
+        }
+        .data-table th, .data-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            white-space: normal;
+            word-wrap: break-word;
+        }
+
+        /* Add/replace CSS for new filter layout */
+        .filter-row { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 10px; }
+        .filter-group { min-width: 200px; flex: 1; }
+        .active-filters { margin: 10px 0; }
+        .filter-chip {
+            display: inline-block; background: #9c4dcc; color: #fff; border-radius: 16px;
+            padding: 4px 12px; margin-right: 8px; margin-bottom: 5px; font-size: 0.95em;
+        }
+        .filter-chip .remove-chip { margin-left: 8px; cursor: pointer; font-weight: bold; }
+        .reset-btn { background: #6a1b9a; color: #fff; border: none; border-radius: 16px; padding: 6px 18px; cursor: pointer; }
+
+        .active-filters-bar {
+            background: #f3e5f5;
+            border-radius: 20px;
+            padding: 10px 18px;
+            margin: 10px 0 18px 0;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            min-height: 40px;
+        }
+        .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            background: #9c4dcc;
+            color: #fff;
+            border-radius: 16px;
+            padding: 4px 12px;
+            margin-right: 4px;
+            margin-bottom: 4px;
+            font-size: 1em;
+        }
+        .filter-chip .remove-chip {
+            margin-left: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #fff;
+            font-size: 1.1em;
         }
     </style>
 </head>
@@ -384,31 +472,30 @@
                 {% endif %}
             {% endwith %}
 
-            <div class="filters-container">
-                <div class="form-group">
+            <div class="filter-row">
+                <div class="filter-group">
                     <label for="code">Code(s): <span class="required">*</span></label>
                     <select id="code" name="code" multiple style="width: 100%"></select>
-                    <div class="search-help">Select one or more codes</div>
+                </div>
+                <div class="filter-group">
+                    <label for="region">Region(s):</label>
+                    <select id="region" name="region" multiple style="width: 100%"></select>
+                </div>
+                <div class="filter-group">
+                    <label for="city">City/Cities:</label>
+                    <select id="city" name="city" multiple style="width: 100%"></select>
+                </div>
+                <div class="filter-group">
+                    <label for="payer_name">Payer Name:</label>
+                    <select id="payer_name" name="payer_name" multiple style="width: 100%"></select>
+                </div>
+                <div class="filter-group">
+                    <label for="plan_name">Plan Name:</label>
+                    <select id="plan_name" name="plan_name" multiple style="width: 100%"></select>
                 </div>
             </div>
-
-            <div class="optional-filters">
-                <h3>Optional Filters</h3>
-                <div class="filters-container">
-                    <div class="form-group">
-                        <label for="region">Region(s):</label>
-                        <select id="region" name="region" multiple style="width: 100%"></select>
-                    </div>
-                    <div class="form-group">
-                        <label for="city">City/Cities:</label>
-                        <select id="city" name="city" multiple style="width: 100%"></select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="active-filters" id="active-filters"></div>
-            
-            <button id="generate-report" class="report-button" disabled>Generate Report</button>
+            <div class="active-filters-bar" id="active-filters"></div>
+            <button class="reset-btn" id="reset-filters">Reset All</button>
         </div>
 
         <div id="loading">Loading data...</div>
@@ -448,7 +535,7 @@
             `;
             document.head.appendChild(style);
 
-            // Only use formatOptionWithCheckbox for Select2 dropdowns (code, region, city)
+            // Only use formatOptionWithCheckbox for Select2 dropdowns (code, region, city, payer_name, plan_name)
             function formatOptionWithCheckbox(option) {
                 if (!option.id) return option.text;
                 const checked = $(option.element).prop('selected');
@@ -488,6 +575,40 @@
                     return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
                 }
             });
+            $('#payer_name').select2({
+                placeholder: "Select payer name(s)",
+                allowClear: true,
+                closeOnSelect: false,
+                templateResult: formatOptionWithCheckbox,
+                templateSelection: function(selection) {
+                    return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
+                }
+            });
+            $('#plan_name').select2({
+                placeholder: "Select plan name(s)",
+                allowClear: true,
+                closeOnSelect: false,
+                templateResult: formatOptionWithCheckbox,
+                templateSelection: function(selection) {
+                    return selection.length > 0 ? selection.map(s => s.text).join(', ') : '';
+                }
+            });
+
+            // Handle 'All' logic for each filter
+            function handleAllLogic(selector) {
+                $(selector).on('select2:select', function(e) {
+                    if (e.params.data.id === 'all') {
+                        $(selector).val(['all']).trigger('change.select2');
+                    } else {
+                        let vals = $(selector).val().filter(v => v !== 'all');
+                        $(selector).val(vals).trigger('change.select2');
+                    }
+                });
+            }
+            handleAllLogic('#region');
+            handleAllLogic('#city');
+            handleAllLogic('#payer_name');
+            handleAllLogic('#plan_name');
 
             // Function to load all initial data
             function loadInitialData() {
@@ -508,6 +629,16 @@
                             cityOptions = data.cities;
                             $('#city').empty();
                             cityOptions.forEach(city => $('#city').append(new Option(city, city)));
+                            // Populate payer_name multi-select
+                            $('#payer_name').empty();
+                            if (data.payer_names) {
+                                data.payer_names.forEach(payer => $('#payer_name').append(new Option(payer, payer)));
+                            }
+                            // Populate plan_name multi-select
+                            $('#plan_name').empty();
+                            if (data.plan_names) {
+                                data.plan_names.forEach(plan => $('#plan_name').append(new Option(plan, plan)));
+                            }
                             setTimeout(() => {
                                 $('#loading-screen').fadeOut(500, function() {
                                     $('.main-content').fadeIn(500);
@@ -524,28 +655,110 @@
             }
 
             // Load data when document is ready
-            loadInitialData().catch(function(error) {
+            loadInitialData().then(function() {
+                fetchData();
+            }).catch(function(error) {
                 console.error('Failed to load initial data:', error);
             });
 
             // Function to update active filters display
             function updateActiveFilters() {
                 const activeFilters = [];
-                const city = $('#city').val();
-                const region = $('#region').val();
                 const code = $('#code').val();
-                if (code && code.length > 0) activeFilters.push(`Code(s): ${code.join(', ')}`);
-                if (region && region.length > 0) activeFilters.push(`Region(s): ${region.join(', ')}`);
-                if (city && city.length > 0) activeFilters.push(`City/Cities: ${city.join(', ')}`);
-                const container = $('#active-filters');
-                container.empty();
-                if (activeFilters.length > 0) {
-                    container.append('<strong>Active Filters: </strong>');
-                    activeFilters.forEach(filter => {
-                        container.append(`<span class="filter-tag">${filter}</span>`);
+                const region = $('#region').val();
+                const city = $('#city').val();
+                const payerNames = $('#payer_name').val();
+                const planNames = $('#plan_name').val();
+
+                function getLabel(selector, value) {
+                    const opt = $(`${selector} option[value='${value.replace(/'/g, "\\'") }']`);
+                    if (opt.length && opt.text().toLowerCase().includes('loading')) {
+                        return null; // skip loading options
+                    }
+                    return opt.length ? opt.text() : value;
+                }
+
+                if (code && code.length > 0) {
+                    code.forEach(c => {
+                        if (c === 'all') {
+                            activeFilters.push({type: 'Code', value: 'All'});
+                        } else {
+                            const label = getLabel('#code', c);
+                            if (label) activeFilters.push({type: 'Code', value: label});
+                        }
                     });
                 }
+                if (region && region.length > 0) {
+                    region.forEach(r => {
+                        if (r === 'all') {
+                            activeFilters.push({type: 'Region', value: 'All'});
+                        } else {
+                            const label = getLabel('#region', r);
+                            if (label) activeFilters.push({type: 'Region', value: label});
+                        }
+                    });
+                }
+                if (city && city.length > 0) {
+                    city.forEach(c => {
+                        if (c === 'all') {
+                            activeFilters.push({type: 'City', value: 'All'});
+                        } else {
+                            const label = getLabel('#city', c);
+                            if (label) activeFilters.push({type: 'City', value: label});
+                        }
+                    });
+                }
+                if (payerNames && payerNames.length > 0) {
+                    payerNames.forEach(p => {
+                        if (p === 'all') {
+                            activeFilters.push({type: 'Payer Name', value: 'All'});
+                        } else {
+                            const label = getLabel('#payer_name', p);
+                            if (label) activeFilters.push({type: 'Payer Name', value: label});
+                        }
+                    });
+                }
+                if (planNames && planNames.length > 0) {
+                    planNames.forEach(p => {
+                        if (p === 'all') {
+                            activeFilters.push({type: 'Plan Name', value: 'All'});
+                        } else {
+                            const label = getLabel('#plan_name', p);
+                            if (label) activeFilters.push({type: 'Plan Name', value: label});
+                        }
+                    });
+                }
+
+                const container = $('#active-filters');
+                container.empty();
+                activeFilters.forEach(filter => {
+                    const chip = $(`<span class="filter-chip">${filter.type}: ${filter.value} <span class="remove-chip" data-type="${filter.type.toLowerCase().replace(' ', '_')}" data-value="${filter.value}">&times;</span></span>`);
+                    container.append(chip);
+                });
             }
+
+            // Remove a filter when chip is clicked
+            $(document).on('click', '.remove-chip', function() {
+                const type = $(this).data('type');
+                const value = $(this).data('value');
+                const $select = $('#' + type);
+                let vals = $select.val() || [];
+                vals = vals.filter(v => v !== value);
+                $select.val(vals).trigger('change.select2');
+                updateCascadingFilters();
+                fetchData();
+            });
+
+            // Reset all filters
+            $('#reset-filters').on('click', function() {
+                $('#code').val(null).trigger('change.select2');
+                $('#region').val(null).trigger('change.select2');
+                $('#city').val(null).trigger('change.select2');
+                $('#payer_name').val(null).trigger('change.select2');
+                $('#plan_name').val(null).trigger('change.select2');
+                updateCascadingFilters();
+                fetchData();
+            });
 
             // User-friendly column name mapping
             const COLUMN_DISPLAY_NAMES = {
@@ -555,7 +768,11 @@
                 city: 'City',
                 region: 'Region',
                 payer_name: 'Payer Name',
-                plan_name: 'Plan Name'
+                plan_name: 'Plan Name',
+                standard_charge_min: 'Min Charge',
+                standard_charge_max: 'Max Charge',
+                standard_charge_gross: 'Gross Charge',
+                standard_charge_negotiated_dollar: 'Negotiated Charge'
             };
 
             // Function to fetch and display data
@@ -563,20 +780,28 @@
                 const codes = $('#code').val();
                 const regions = $('#region').val();
                 const cities = $('#city').val();
+                const payerNames = $('#payer_name').val();
+                const planNames = $('#plan_name').val();
+                // Codes is mandatory
                 if (!codes || codes.length === 0) {
-                    $('#hospital-data').hide();
+                    // Hide table and show a message
+                    document.getElementById('hospital-data').style.display = 'none';
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error-message').style.display = 'block';
+                    document.getElementById('error-message').textContent = 'Please select at least one code to view data.';
                     return;
                 }
                 if (currentRequest) currentRequest.abort();
                 const params = new URLSearchParams();
-                codes.forEach(c => params.append('code', c));
+                codes && codes.forEach(c => params.append('code', c));
                 regions && regions.forEach(r => params.append('region', r));
                 cities && cities.forEach(c => params.append('city', c));
+                payerNames && payerNames.forEach(p => params.append('payer_name', p));
+                planNames && planNames.forEach(p => params.append('plan_name', p));
                 const table = document.getElementById('hospital-data');
                 const loading = document.getElementById('loading');
                 const errorMessage = document.getElementById('error-message');
                 loading.style.display = 'block';
-                table.style.display = 'none';
                 errorMessage.style.display = 'none';
                 currentRequest = $.ajax({
                     url: `/get_data?${params.toString()}`,
@@ -589,9 +814,7 @@
                         headerRow.innerHTML = '';
                         tableBody.innerHTML = '';
                         // Add headers
-                        const filteredColumns = data.columns.filter(col => {
-                            return COLUMN_DISPLAY_NAMES[col] !== undefined;
-                        });
+                        const filteredColumns = data.columns.filter(col => col !== 'id');
                         filteredColumns.forEach(column => {
                             const th = document.createElement('th');
                             th.style.cursor = 'pointer';
@@ -608,14 +831,17 @@
                             btn.onclick = function(e) {
                                 const col = btn.getAttribute('data-col');
                                 if (currentSort.column === col) {
-                                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                                    if (currentSort.direction === 'asc') {
+                                        currentSort.direction = 'desc';
+                                    } else if (currentSort.direction === 'desc') {
+                                        currentSort.column = null;
+                                        currentSort.direction = null;
+                                    }
                                 } else {
                                     currentSort.column = col;
                                     currentSort.direction = 'asc';
                                 }
                                 renderTableRows(filteredColumns, data.data);
-                                // Re-render headers to update sort arrow
-                                fetchData.lastData = data;
                                 renderTableHeaders(filteredColumns);
                             };
                         });
@@ -628,17 +854,27 @@
                                 sortedRows.sort((a, b) => {
                                     let v1 = a[currentSort.column];
                                     let v2 = b[currentSort.column];
-                                    if (typeof v1 === 'number' && typeof v2 === 'number') {
-                                        return currentSort.direction === 'asc' ? v1 - v2 : v2 - v1;
+                                    // Handle null/undefined values
+                                    if (v1 === null || v1 === undefined) v1 = '';
+                                    if (v2 === null || v2 === undefined) v2 = '';
+                                    // Convert to string for comparison
+                                    v1 = v1.toString().toLowerCase();
+                                    v2 = v2.toString().toLowerCase();
+                                    // Try to convert to numbers if possible
+                                    const num1 = parseFloat(v1);
+                                    const num2 = parseFloat(v2);
+                                    if (!isNaN(num1) && !isNaN(num2)) {
+                                        // Both values are numbers
+                                        return currentSort.direction === 'asc' ? num1 - num2 : num2 - num1;
+                                    } else {
+                                        // At least one value is not a number, do string comparison
+                                        if (v1 < v2) return currentSort.direction === 'asc' ? -1 : 1;
+                                        if (v1 > v2) return currentSort.direction === 'asc' ? 1 : -1;
+                                        return 0;
                                     }
-                                    v1 = v1 ? v1.toString().toLowerCase() : '';
-                                    v2 = v2 ? v2.toString().toLowerCase() : '';
-                                    if (v1 < v2) return currentSort.direction === 'asc' ? -1 : 1;
-                                    if (v1 > v2) return currentSort.direction === 'asc' ? 1 : -1;
-                                    return 0;
                                 });
                             }
-                            sortedRows.slice(0, 20).forEach(row => {
+                            sortedRows.slice(0, 100).forEach(row => {
                                 const tr = document.createElement('tr');
                                 columns.forEach(column => {
                                     const td = document.createElement('td');
@@ -667,13 +903,18 @@
                                 btn.onclick = function(e) {
                                     const col = btn.getAttribute('data-col');
                                     if (currentSort.column === col) {
-                                        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                                        if (currentSort.direction === 'asc') {
+                                            currentSort.direction = 'desc';
+                                        } else if (currentSort.direction === 'desc') {
+                                            currentSort.column = null;
+                                            currentSort.direction = null;
+                                        }
                                     } else {
                                         currentSort.column = col;
                                         currentSort.direction = 'asc';
                                     }
-                                    renderTableRows(fetchData.lastData.columns, fetchData.lastData.data);
-                                    renderTableHeaders(fetchData.lastData.columns);
+                                    renderTableRows(filteredColumns, data.data);
+                                    renderTableHeaders(filteredColumns);
                                 };
                             });
                         }
@@ -681,7 +922,7 @@
                         fetchData.lastData = data;
                         renderTableRows(filteredColumns, data.data);
                         renderTableHeaders(filteredColumns);
-                        // Show table, hide loading
+                        // Always show table, hide loading
                         table.style.display = 'table';
                         loading.style.display = 'none';
                         updateActiveFilters();
@@ -697,84 +938,130 @@
                 });
             }
 
-            // Helper to update region options based on selected codes
-            function updateRegionOptions(selectedCodes) {
-                $.get('/api/initial-data')
-                    .done(function(data) {
-                        let filteredRegions = data.regions;
-                        if (selectedCodes && selectedCodes.length > 0) {
-                            // Filter regions based on selected codes
-                            $.get('/get_data?' + selectedCodes.map(c => 'code=' + encodeURIComponent(c)).join('&'), function(result) {
-                                const regionSet = new Set(result.data.map(row => row.region));
-                                filteredRegions = data.regions.filter(r => regionSet.has(r));
-                                $('#region').empty();
-                                filteredRegions.forEach(region => $('#region').append(new Option(region, region)));
-                                $('#region').trigger('change.select2');
-                            });
-                        } else {
-                            $('#region').empty();
-                            data.regions.forEach(region => $('#region').append(new Option(region, region)));
-                            $('#region').trigger('change.select2');
-                        }
-                    });
+            // Debounce utility
+            function debounce(func, wait) {
+                let timeout;
+                return function(...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => func.apply(this, args), wait);
+                };
             }
-            // Helper to update city options based on selected codes and regions
-            function updateCityOptions(selectedCodes, selectedRegions) {
-                $.get('/api/initial-data')
-                    .done(function(data) {
-                        let filteredCities = data.cities;
-                        if ((selectedCodes && selectedCodes.length > 0) || (selectedRegions && selectedRegions.length > 0)) {
-                            let params = [];
-                            if (selectedCodes && selectedCodes.length > 0) params = params.concat(selectedCodes.map(c => 'code=' + encodeURIComponent(c)));
-                            if (selectedRegions && selectedRegions.length > 0) params = params.concat(selectedRegions.map(r => 'region=' + encodeURIComponent(r)));
-                            $.get('/get_data?' + params.join('&'), function(result) {
-                                const citySet = new Set(result.data.map(row => row.city));
-                                filteredCities = data.cities.filter(c => citySet.has(c));
-                                $('#city').empty();
-                                filteredCities.forEach(city => $('#city').append(new Option(city, city)));
-                                $('#city').trigger('change.select2');
-                            });
-                        } else {
-                            $('#city').empty();
-                            data.cities.forEach(city => $('#city').append(new Option(city, city)));
-                            $('#city').trigger('change.select2');
-                        }
-                    });
-            }
-            // On code change, update region and city options
-            $('#code').on('change', function() {
-                const selectedCodes = $(this).val();
-                updateRegionOptions(selectedCodes);
-                updateCityOptions(selectedCodes, $('#region').val());
-                fetchData();
-            });
-            // On region change, update city options
-            $('#region').on('change', function() {
-                const selectedCodes = $('#code').val();
-                const selectedRegions = $(this).val();
-                updateCityOptions(selectedCodes, selectedRegions);
-                fetchData();
-            });
-            // On city change, just fetch data
-            $('#city').on('change', fetchData);
 
-            // Generate Report button click handler
-            $('#generate-report').on('click', function() {
-                const codes = $('#code').val();
-                const regions = $('#region').val();
-                const cities = $('#city').val();
+            // Show loading in dropdowns
+            function setDropdownLoading(selector) {
+                $(selector).empty().append(new Option('Loading...', '', true, true)).trigger('change.select2');
+                $(selector).prop('disabled', true);
+            }
+            function unsetDropdownLoading(selector) {
+                $(selector).prop('disabled', false);
+            }
+
+            // Debounced version of updateCascadingFilters
+            const debouncedUpdateCascadingFilters = debounce(function() {
+                setDropdownLoading('#region');
+                setDropdownLoading('#city');
+                setDropdownLoading('#payer_name');
+                setDropdownLoading('#plan_name');
+                updateCascadingFilters();
+            }, 250);
+
+            // On region change, show loading in city dropdown immediately
+            $('#region').on('change', function() {
+                setDropdownLoading('#city');
+                setDropdownLoading('#payer_name');
+                setDropdownLoading('#plan_name');
+                debouncedUpdateCascadingFilters();
+                fetchData();
+            });
+            // On city change, show loading in payer_name and plan_name immediately
+            $('#city').on('change', function() {
+                setDropdownLoading('#payer_name');
+                setDropdownLoading('#plan_name');
+                debouncedUpdateCascadingFilters();
+                fetchData();
+            });
+            // On payer_name change, show loading in plan_name immediately
+            $('#payer_name').on('change', function() {
+                setDropdownLoading('#plan_name');
+                debouncedUpdateCascadingFilters();
+                fetchData();
+            });
+            // On plan_name change, just update as usual
+            $('#plan_name').on('change', function() {
+                debouncedUpdateCascadingFilters();
+                fetchData();
+            });
+            // On code change, show loading in all dependent dropdowns immediately
+            $('#code').on('change', function() {
+                setDropdownLoading('#region');
+                setDropdownLoading('#city');
+                setDropdownLoading('#payer_name');
+                setDropdownLoading('#plan_name');
+                debouncedUpdateCascadingFilters();
+                fetchData();
+            });
+
+            // In updateCascadingFilters(), after updating each dropdown, call unsetDropdownLoading(selector)
+            function updateCascadingFilters() {
+                const codes = $('#code').val() || [];
+                const regions = $('#region').val() || [];
+                const cities = $('#city').val() || [];
+                const payerNames = $('#payer_name').val() || [];
+                const planNames = $('#plan_name').val() || [];
                 const params = new URLSearchParams();
                 codes.forEach(c => params.append('code', c));
                 regions.forEach(r => params.append('region', r));
                 cities.forEach(c => params.append('city', c));
-                // Create a temporary link to trigger the download
-                const link = document.createElement('a');
-                link.href = `/generate_report?${params.toString()}`;
-                link.download = `hospital_report.csv`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            });
+                payerNames.forEach(p => params.append('payer_name', p));
+                planNames.forEach(p => params.append('plan_name', p));
+                $.get('/api/filter-options?' + params.toString(), function(data) {
+                    // Update Region(s)
+                    const prevRegions = $('#region').val() || [];
+                    $('#region').empty();
+                    $('#region').append(new Option('All', 'all'));
+                    data.regions.forEach(region => {
+                        $('#region').append(new Option(`${region.name} (${region.count})`, region.name));
+                    });
+                    const regionNames = data.regions.map(r => r.name);
+                    $('#region').val(prevRegions.filter(r => r === 'all' || regionNames.includes(r)));
+                    unsetDropdownLoading('#region');
+                    $('#region').trigger('change.select2');
+                    // Update City/Cities
+                    $('#city').empty();
+                    $('#city').append(new Option('All', 'all'));
+                    data.cities.forEach(city => {
+                        $('#city').append(new Option(`${city.name} (${city.count})`, city.name));
+                    });
+                    console.log('Cities added to dropdown:', data.cities.map(city => city.name));
+                    const cityNames = data.cities.map(c => c.name);
+                    const prevCities = $('#city').val() || [];
+                    $('#city').val(prevCities.filter(c => c === 'all' || cityNames.includes(c)));
+                    unsetDropdownLoading('#city');
+                    $('#city').trigger('change.select2');
+                    // Update Payer Name
+                    const prevPayers = $('#payer_name').val() || [];
+                    $('#payer_name').empty();
+                    $('#payer_name').append(new Option('All', 'all'));
+                    data.payer_names.forEach(payer => {
+                        $('#payer_name').append(new Option(`${payer.name} (${payer.count})`, payer.name));
+                    });
+                    const payerNamesList = data.payer_names.map(p => p.name);
+                    $('#payer_name').val(prevPayers.filter(p => p === 'all' || payerNamesList.includes(p)));
+                    unsetDropdownLoading('#payer_name');
+                    $('#payer_name').trigger('change.select2');
+                    // Update Plan Name
+                    const prevPlans = $('#plan_name').val() || [];
+                    $('#plan_name').empty();
+                    $('#plan_name').append(new Option('All', 'all'));
+                    data.plan_names.forEach(plan => {
+                        $('#plan_name').append(new Option(`${plan.name} (${plan.count})`, plan.name));
+                    });
+                    const planNamesList = data.plan_names.map(p => p.name);
+                    $('#plan_name').val(prevPlans.filter(p => p === 'all' || planNamesList.includes(p)));
+                    unsetDropdownLoading('#plan_name');
+                    $('#plan_name').trigger('change.select2');
+                });
+            }
 
             // In JS, track which charge columns are selected
             $('.charge-col-toggle').on('change', function() {
