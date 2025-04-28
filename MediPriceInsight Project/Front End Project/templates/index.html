@@ -780,28 +780,24 @@
                 const codes = $('#code').val();
                 const regions = $('#region').val();
                 const cities = $('#city').val();
-                const payerNames = $('#payer_name').val();
-                const planNames = $('#plan_name').val();
-                // Codes is mandatory
+                const payerName = $('#payer_name').val();
+                const planName = $('#plan_name').val();
                 if (!codes || codes.length === 0) {
-                    // Hide table and show a message
-                    document.getElementById('hospital-data').style.display = 'none';
-                    document.getElementById('loading').style.display = 'none';
-                    document.getElementById('error-message').style.display = 'block';
-                    document.getElementById('error-message').textContent = 'Please select at least one code to view data.';
+                    $('#hospital-data').hide();
                     return;
                 }
                 if (currentRequest) currentRequest.abort();
                 const params = new URLSearchParams();
-                codes && codes.forEach(c => params.append('code', c));
+                codes.forEach(c => params.append('code', c));
                 regions && regions.forEach(r => params.append('region', r));
                 cities && cities.forEach(c => params.append('city', c));
-                payerNames && payerNames.forEach(p => params.append('payer_name', p));
-                planNames && planNames.forEach(p => params.append('plan_name', p));
+                if (payerName) params.append('payer_name', payerName);
+                if (planName) params.append('plan_name', planName);
                 const table = document.getElementById('hospital-data');
                 const loading = document.getElementById('loading');
                 const errorMessage = document.getElementById('error-message');
                 loading.style.display = 'block';
+                table.style.display = 'none';
                 errorMessage.style.display = 'none';
                 currentRequest = $.ajax({
                     url: `/get_data?${params.toString()}`,
@@ -814,7 +810,9 @@
                         headerRow.innerHTML = '';
                         tableBody.innerHTML = '';
                         // Add headers
-                        const filteredColumns = data.columns.filter(col => col !== 'id');
+                        const filteredColumns = data.columns.filter(col => {
+                            return COLUMN_DISPLAY_NAMES[col] !== undefined && col !== 'id';
+                        });
                         filteredColumns.forEach(column => {
                             const th = document.createElement('th');
                             th.style.cursor = 'pointer';
@@ -831,17 +829,14 @@
                             btn.onclick = function(e) {
                                 const col = btn.getAttribute('data-col');
                                 if (currentSort.column === col) {
-                                    if (currentSort.direction === 'asc') {
-                                        currentSort.direction = 'desc';
-                                    } else if (currentSort.direction === 'desc') {
-                                        currentSort.column = null;
-                                        currentSort.direction = null;
-                                    }
+                                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
                                 } else {
                                     currentSort.column = col;
                                     currentSort.direction = 'asc';
                                 }
                                 renderTableRows(filteredColumns, data.data);
+                                // Re-render headers to update sort arrow
+                                fetchData.lastData = data;
                                 renderTableHeaders(filteredColumns);
                             };
                         });
@@ -854,27 +849,17 @@
                                 sortedRows.sort((a, b) => {
                                     let v1 = a[currentSort.column];
                                     let v2 = b[currentSort.column];
-                                    // Handle null/undefined values
-                                    if (v1 === null || v1 === undefined) v1 = '';
-                                    if (v2 === null || v2 === undefined) v2 = '';
-                                    // Convert to string for comparison
-                                    v1 = v1.toString().toLowerCase();
-                                    v2 = v2.toString().toLowerCase();
-                                    // Try to convert to numbers if possible
-                                    const num1 = parseFloat(v1);
-                                    const num2 = parseFloat(v2);
-                                    if (!isNaN(num1) && !isNaN(num2)) {
-                                        // Both values are numbers
-                                        return currentSort.direction === 'asc' ? num1 - num2 : num2 - num1;
-                                    } else {
-                                        // At least one value is not a number, do string comparison
-                                        if (v1 < v2) return currentSort.direction === 'asc' ? -1 : 1;
-                                        if (v1 > v2) return currentSort.direction === 'asc' ? 1 : -1;
-                                        return 0;
+                                    if (typeof v1 === 'number' && typeof v2 === 'number') {
+                                        return currentSort.direction === 'asc' ? v1 - v2 : v2 - v1;
                                     }
+                                    v1 = v1 ? v1.toString().toLowerCase() : '';
+                                    v2 = v2 ? v2.toString().toLowerCase() : '';
+                                    if (v1 < v2) return currentSort.direction === 'asc' ? -1 : 1;
+                                    if (v1 > v2) return currentSort.direction === 'asc' ? 1 : -1;
+                                    return 0;
                                 });
                             }
-                            sortedRows.slice(0, 100).forEach(row => {
+                            sortedRows.slice(0, 20).forEach(row => {
                                 const tr = document.createElement('tr');
                                 columns.forEach(column => {
                                     const td = document.createElement('td');
@@ -903,18 +888,13 @@
                                 btn.onclick = function(e) {
                                     const col = btn.getAttribute('data-col');
                                     if (currentSort.column === col) {
-                                        if (currentSort.direction === 'asc') {
-                                            currentSort.direction = 'desc';
-                                        } else if (currentSort.direction === 'desc') {
-                                            currentSort.column = null;
-                                            currentSort.direction = null;
-                                        }
+                                        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
                                     } else {
                                         currentSort.column = col;
                                         currentSort.direction = 'asc';
                                     }
-                                    renderTableRows(filteredColumns, data.data);
-                                    renderTableHeaders(filteredColumns);
+                                    renderTableRows(fetchData.lastData.columns, fetchData.lastData.data);
+                                    renderTableHeaders(fetchData.lastData.columns);
                                 };
                             });
                         }
@@ -922,7 +902,7 @@
                         fetchData.lastData = data;
                         renderTableRows(filteredColumns, data.data);
                         renderTableHeaders(filteredColumns);
-                        // Always show table, hide loading
+                        // Show table, hide loading
                         table.style.display = 'table';
                         loading.style.display = 'none';
                         updateActiveFilters();
