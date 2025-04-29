@@ -56,11 +56,33 @@ Request: Remove specific fields from filters:
 - standard_charge_negotiated_dollar
 Action: Added EXCLUDED_FILTERS array in app.js while maintaining all columns in the table display
 
+5. Filter Population Fix
+-----------------------
+Request: Fix issue where filters only show "All" option and don't populate with values
+Action: 
+- Improved null value handling in filters
+- Added case-insensitive value comparison
+- Fixed numeric value sorting
+- Added proper type conversion
+- Improved filter initialization
+
+6. Mandatory Code Filter
+-----------------------
+Request: Make code filter mandatory and populate filters based on entire dataset first
+Action:
+- Added mandatory code filter with visual indicator (*)
+- Initially hide table data until code is selected
+- Populate all filter options based on complete dataset
+- Reset other filters when code changes
+- Added "Select a code" placeholder for code filter
+- Improved filter cascade behavior based on code selection
+
 Current Status
 -------------
 - Frontend displays all data in a responsive table
-- Filters are available for: code, description, city, region, payer_name, plan_name
+- Code filter is mandatory and must be selected to view data
+- Other filters are optional and cascade based on code selection
+- All filters populate with values from the complete dataset
 - All monetary values are properly formatted
 - Data is paginated to 1000 rows per page
-- Cascading filters work correctly
 - All columns are displayed but with selective filtering 

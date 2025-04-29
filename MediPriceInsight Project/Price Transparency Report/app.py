@@ -1,14 +1,23 @@
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
+from flask_caching import Cache
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
 import logging
+from datetime import datetime
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.')
+
+# Configure Flask-Caching
+cache = Cache(app, config={
+    'CACHE_TYPE': 'simple',
+    'CACHE_DEFAULT_TIMEOUT': 300  # 5 minutes
+})
 
 # Database configuration
 DB_CONFIG = {
@@ -18,6 +27,14 @@ DB_CONFIG = {
     'password': 'Consis10C!',
     'port': '5432'
 }
+
+# Performance monitoring
+def log_performance(func_name, start_time, row_count=None):
+    duration = time.time() - start_time
+    if row_count:
+        logger.info(f"Performance: {func_name} - {duration:.2f}s - {row_count} rows")
+    else:
+        logger.info(f"Performance: {func_name} - {duration:.2f}s")
 
 def get_db_connection():
     try:
@@ -41,60 +58,142 @@ def serve_css():
 def serve_js():
     return send_from_directory('.', 'app.js')
 
-@app.route('/api/report')
-def get_report():
+def get_distinct_values(cur, column):
+    """Helper function to get distinct values for a column"""
+    query = f"""
+        SELECT DISTINCT {column}
+        FROM public.hospital_dataset
+        WHERE {column} IS NOT NULL
+        ORDER BY {column}
+    """
+    cur.execute(query)
+    return [row[column] for row in cur.fetchall()]
+
+@app.route('/api/filters')
+@cache.cached(timeout=300)  # Cache for 5 minutes
+def get_filters():
+    start_time = time.time()
     conn = get_db_connection()
     if not conn:
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Get all columns from the view directly
-            logger.info("Fetching column information...")
-            cur.execute("""
-                SELECT column_name, data_type
-                FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                AND table_name = 'hospital_dataset'
-                ORDER BY ordinal_position
-            """)
-            columns_info = cur.fetchall()
+            # Get distinct values for each filter separately
+            filter_values = {
+                'code': get_distinct_values(cur, 'code'),
+                'city': get_distinct_values(cur, 'city'),
+                'region': get_distinct_values(cur, 'region'),
+                'payer_name': get_distinct_values(cur, 'payer_name'),
+                'plan_name': get_distinct_values(cur, 'plan_name')
+            }
             
-            if not columns_info:
-                logger.error("No columns found in the view")
-                return jsonify({'error': 'View or columns not found'}), 404
+            duration = time.time() - start_time
+            logger.info(f"Filters fetched in {duration:.2f}s")
+            logger.info(f"Filter counts: " + 
+                       f"codes={len(filter_values['code'])}, " +
+                       f"cities={len(filter_values['city'])}, " +
+                       f"regions={len(filter_values['region'])}, " +
+                       f"payers={len(filter_values['payer_name'])}, " +
+                       f"plans={len(filter_values['plan_name'])}")
             
-            columns = [row['column_name'] for row in columns_info]
-            logger.info(f"Found columns: {columns}")
-            
-            # Build the SELECT query with all columns
-            select_columns = ', '.join(columns)
-            query = f"""
-                SELECT {select_columns}
-                FROM public.hospital_dataset
-                ORDER BY hospital_name, payer_name, plan_name
-                LIMIT 1000
-            """
-            logger.info(f"Executing query: {query}")
-            
-            cur.execute(query)
-            results = cur.fetchall()
-            logger.info(f"Query returned {len(results)} rows")
-            
-            if len(results) > 0:
-                logger.info(f"First row sample: {results[0]}")
-            
-            return jsonify(results)
-    except psycopg2.Error as e:
-        logger.error(f"PostgreSQL Error: {str(e)}")
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
+            return jsonify(filter_values)
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+        logger.error(f"Error fetching filter values: {str(e)}")
+        return jsonify({'error': str(e)}), 500
     finally:
         if conn:
             conn.close()
-            logger.info("Database connection closed")
+
+@app.route('/api/report')
+def get_report():
+    start_time = time.time()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        # Get pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 100))
+        offset = (page - 1) * per_page
+
+        # Get filter parameters
+        code_search = request.args.get('code')  # This will now be used for both code and description search
+        city = request.args.get('city')
+        region = request.args.get('region')
+        payer_name = request.args.get('payer_name')
+        plan_name = request.args.get('plan_name')
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Build WHERE clause
+            conditions = []
+            params = []
+            
+            if code_search:
+                conditions.append("(code ILIKE %s OR description ILIKE %s)")
+                search_pattern = f"%{code_search}%"
+                params.extend([search_pattern, search_pattern])
+            if city:
+                conditions.append("city = %s")
+                params.append(city)
+            if region:
+                conditions.append("region = %s")
+                params.append(region)
+            if payer_name:
+                conditions.append("payer_name = %s")
+                params.append(payer_name)
+            if plan_name:
+                conditions.append("plan_name = %s")
+                params.append(plan_name)
+
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM public.hospital_dataset
+                WHERE {where_clause}
+            """
+            cur.execute(count_query, params)
+            total_count = cur.fetchone()['count']
+
+            # Get paginated data
+            if total_count > 0:
+                data_query = f"""
+                    SELECT 
+                        id, hospital_name, code, description,
+                        hospital_address, city, region,
+                        payer_name, plan_name,
+                        standard_charge_min, standard_charge_max,
+                        standard_charge_gross, standard_charge_negotiated_dollar
+                    FROM public.hospital_dataset
+                    WHERE {where_clause}
+                    ORDER BY hospital_name, payer_name, plan_name
+                    LIMIT %s OFFSET %s
+                """
+                params.extend([per_page, offset])
+                cur.execute(data_query, params)
+                results = cur.fetchall()
+            else:
+                results = []
+
+            duration = time.time() - start_time
+            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
+            
+            return jsonify({
+                'data': results,
+                'total': total_count,
+                'page': page,
+                'per_page': per_page,
+                'total_pages': (total_count + per_page - 1) // per_page
+            })
+    except Exception as e:
+        logger.error(f"Error fetching report data: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000) 
