@@ -86,3 +86,78 @@ Current Status
 - All monetary values are properly formatted
 - Data is paginated to 1000 rows per page
 - All columns are displayed but with selective filtering 
+
+MediPriceInsight Project - Development History and Changes
+
+1. Performance Optimization
+- Initial request: Make table very responsive with results in seconds after filters are applied
+- Implemented client-side filtering and pagination
+- Added performance monitoring in browser console
+- Optimized data flow and table updates
+- Enhanced user experience with near-instantaneous responses after initial data load
+
+2. Dropdown Menu Fixes
+- Issue: Dropdown menus overlapping other content
+- Solution: Modified CSS to ensure dropdowns appear above content
+- Added z-index management
+- Improved dropdown visibility
+- Enhanced mobile experience
+- Added proper container positioning
+
+3. Dropdown Standardization
+- Converted region, city, payer name, and plan name dropdowns to use Select2
+- Implemented multi-select behavior
+- Created uniform experience across all dropdowns
+- Enhanced usability and consistency
+
+4. Region and City Column Updates
+- Fixed Texas filtering issue
+- Moved region column before city column
+- Added black column separators
+- Implemented cascading filters between region and city
+- Cities now update based on selected region(s)
+- Maintained valid selections during updates
+
+5. Visual Enhancements
+- Updated chip (tag) styling for selected values
+- Changed text color to white for better visibility
+- Improved padding, margin, and border properties
+- Enhanced hover effects
+- Modified dropdown options' highlighted state
+
+6. Code and Description Search Improvements
+- Implemented case-insensitive search
+- Added ability to search by both code and description
+- Enhanced code fetching to include descriptions
+- Improved dropdown display with formatted options
+- Added parallel loading of descriptions
+- Implemented error handling for failed fetches
+
+7. Data Loading Optimization
+- Removed pagination limits to fetch all data
+- Implemented efficient data loading strategies
+- Added proper error handling
+- Enhanced logging for debugging
+- Improved initial data load performance
+
+8. UI/UX Improvements
+- Added better formatting for dropdown options
+- Enhanced visual separation of code and description
+- Improved hover and selection states
+- Added proper padding and spacing
+- Implemented consistent styling across components
+
+Technical Details:
+- Using Select2 for enhanced dropdown functionality
+- Client-side filtering for better performance
+- Parallel data fetching for descriptions
+- Case-insensitive search across multiple fields
+- Responsive design with mobile optimization
+- Error handling and logging throughout the application
+
+Future Considerations:
+- Continue monitoring performance with larger datasets
+- Consider implementing server-side search for very large datasets
+- Add more detailed logging for troubleshooting
+- Consider caching strategies for frequently accessed data
+- Monitor and optimize memory usage with large datasets 

@@ -127,26 +127,148 @@ function debounce(func, wait) {
 // Fetch filter values
 async function setupFilters() {
     try {
-        console.log('Fetching filter values...');
-        const response = await fetch(FILTERS_ENDPOINT);
-        if (!response.ok) throw new Error('Failed to fetch filter values');
+        console.log('Starting filter setup...');
         
-        const filterValues = await response.json();
-        console.log('Filter values:', filterValues);
+        // First fetch distinct codes and other filter values
+        console.log('Fetching filters...');
+        const codesResponse = await fetch(`${FILTERS_ENDPOINT}`);
+        if (!codesResponse.ok) throw new Error('Failed to fetch codes');
+        const codesData = await codesResponse.json();
+        
+        console.log('Received filter data:', {
+            codesCount: codesData.code?.length || 0,
+            regionsCount: codesData.region?.length || 0,
+            citiesCount: codesData.city?.length || 0
+        });
 
-        // Fetch initial data to get code-description pairs
-        const initialDataResponse = await fetch(`${API_ENDPOINT}?per_page=1000`);
-        if (!initialDataResponse.ok) throw new Error('Failed to fetch initial data');
-        
-        const initialData = await initialDataResponse.json();
-        state.allData = initialData.data;
-        
-        console.log('Initial data loaded:', state.allData.length, 'records');
-        setupDynamicFilters(Object.keys(filterValues));
-        populateFilters(filterValues);
+        // Fetch descriptions for all codes in a single query
+        if (codesData.code && codesData.code.length > 0) {
+            console.log('Fetching descriptions for all codes...');
+            const codes = codesData.code.join(',');
+            const descriptionResponse = await fetch(`${API_ENDPOINT}?codes=${codes}`);
+            if (!descriptionResponse.ok) throw new Error('Failed to fetch descriptions');
+            const descriptionData = await descriptionResponse.json();
+
+            // Create a map of code descriptions
+            const descriptionMap = new Map();
+            if (descriptionData.data) {
+                descriptionData.data.forEach(item => {
+                    if (item.code && !descriptionMap.has(item.code)) {
+                        descriptionMap.set(item.code, item.description || '');
+                    }
+                });
+            }
+
+            console.log('Description map created with size:', descriptionMap.size);
+
+            // Create a map of unique codes with descriptions
+            const uniqueCodes = new Map();
+            codesData.code.forEach(code => {
+                if (code && !uniqueCodes.has(code)) {
+                    uniqueCodes.set(code, {
+                        code: code,
+                        description: descriptionMap.get(code) || ''
+                    });
+                }
+            });
+
+            console.log('Codes mapped with descriptions:', uniqueCodes.size);
+            console.log('Sample codes with descriptions:', 
+                Array.from(uniqueCodes.entries())
+                    .slice(0, 5)
+                    .map(([code, data]) => `${code}: ${data.description}`)
+            );
+
+            // Create filter values object
+            const filterValues = {
+                code: Array.from(uniqueCodes.keys()),
+                region: codesData.region || [],
+                city: codesData.city || [],
+                payer_name: codesData.payer_name || [],
+                plan_name: codesData.plan_name || []
+            };
+
+            // Sort codes alphanumerically
+            filterValues.code.sort((a, b) => {
+                // Extract numeric and non-numeric parts
+                const aMatch = a.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
+                const bMatch = b.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
+                
+                if (!aMatch || !bMatch) return a.localeCompare(b);
+                
+                // Compare parts
+                for (let i = 1; i < 5; i++) {
+                    const aPart = aMatch[i] || '';
+                    const bPart = bMatch[i] || '';
+                    
+                    if (i % 2 === 0) {
+                        // Compare numeric parts
+                        const aNum = parseInt(aPart || '0', 10);
+                        const bNum = parseInt(bPart || '0', 10);
+                        if (aNum !== bNum) return aNum - bNum;
+                    } else {
+                        // Compare non-numeric parts
+                        if (aPart !== bPart) return aPart.localeCompare(bPart);
+                    }
+                }
+                return 0;
+            });
+
+            setupDynamicFilters(Object.keys(filterValues));
+            populateFilters(filterValues, uniqueCodes);
+        } else {
+            console.warn('No codes found in filter data');
+        }
     } catch (error) {
-        console.error('Error fetching filter values:', error);
+        console.error('Error in setupFilters:', error);
         throw error;
+    }
+}
+
+// Function to load remaining descriptions in the background
+async function loadRemainingDescriptions(codes, uniqueCodes) {
+    const batchSize = 10;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (let i = 0; i < codes.length; i += batchSize) {
+        const batch = codes.slice(i, i + batchSize);
+        const batchPromises = batch.map(async code => {
+            try {
+                const response = await fetch(`${API_ENDPOINT}?code=${code}`);
+                if (!response.ok) return { code, description: '' };
+                const data = await response.json();
+                return {
+                    code,
+                    description: data.data?.[0]?.description || ''
+                };
+            } catch (error) {
+                console.warn(`Failed to fetch description for code ${code}:`, error);
+                return { code, description: '' };
+            }
+        });
+
+        const results = await Promise.all(batchPromises);
+        results.forEach(({ code, description }) => {
+            if (uniqueCodes.has(code)) {
+                uniqueCodes.get(code).description = description;
+            }
+        });
+
+        // Update the dropdown with new descriptions
+        const codeFilter = document.getElementById('codeFilter');
+        if (codeFilter) {
+            const options = $(codeFilter).select2('data');
+            options.forEach(option => {
+                if (uniqueCodes.has(option.code)) {
+                    const description = uniqueCodes.get(option.code).description;
+                    option.text = description ? `${option.code} - ${description}` : option.code;
+                }
+            });
+            $(codeFilter).trigger('change');
+        }
+
+        // Add a small delay between batches to prevent overwhelming the server
+        await delay(100);
     }
 }
 
@@ -164,14 +286,15 @@ async function fetchData(page = 1, isInitialLoad = false) {
         
         if (isInitialLoad) {
             // On initial load, fetch all data for the selected code
-            const response = await fetch(`${API_ENDPOINT}?${new URLSearchParams({
-                code: state.filters.code
-            })}`);
+            const params = new URLSearchParams();
+            params.append('code', state.filters.code);
+            
+            const response = await fetch(`${API_ENDPOINT}?${params}`);
             
             if (!response.ok) throw new Error('Failed to fetch data');
             const result = await response.json();
             state.allData = result.data;
-            console.log('Fetched data with descriptions:', state.allData);
+            console.log('Fetched data count:', state.allData.length);
             applyFilters();
         }
         
@@ -252,8 +375,8 @@ function createFilterElement(column, isMandatory) {
 }
 
 // Populate filters with values
-function populateFilters(filterValues) {
-    console.log('Populating filters with values:', filterValues);
+function populateFilters(filterValues, uniqueCodes) {
+    console.log('Starting filter population...');
     state.filterOptions = filterValues;
     
     Object.entries(filterValues).forEach(([column, values]) => {
@@ -264,27 +387,21 @@ function populateFilters(filterValues) {
         }
 
         if (column === 'code') {
-            // Get unique code-description pairs from the current data
-            const codeDescriptionPairs = state.allData.reduce((pairs, item) => {
-                if (item.code && !pairs.has(item.code)) {
-                    pairs.set(item.code, {
-                        code: item.code,
-                        description: item.description || ''
-                    });
-                }
-                return pairs;
-            }, new Map());
-
+            console.log(`Populating ${values.length} codes with descriptions...`);
+            
             // Format options to include both code and description
-            const options = Array.from(codeDescriptionPairs.values())
-                .map(({ code, description }) => ({
+            const options = values.map(code => {
+                const codeData = uniqueCodes.get(code);
+                const description = codeData?.description || '';
+                return {
                     id: code,
-                    text: description ? `${code} - ${description}` : code
-                }))
-                .sort((a, b) => a.id.localeCompare(b.id));
+                    text: description ? `${code} - ${description}` : code,
+                    code: code,
+                    description: description
+                };
+            });
 
-            console.log('Code-description pairs:', Array.from(codeDescriptionPairs.values()));
-            console.log('Formatted options:', options);
+            console.log('Sample formatted options:', options.slice(0, 5));
             
             $(filter).empty().append('<option></option>');
             $(filter).select2({
@@ -299,16 +416,66 @@ function populateFilters(filterValues) {
                         return data;
                     }
 
-                    // Search in both code and description
+                    // Search in both code and description, case insensitive
                     const searchTerm = params.term.toLowerCase();
-                    if (data.text.toLowerCase().indexOf(searchTerm) > -1) {
+                    const code = data.code.toLowerCase();
+                    const description = data.description.toLowerCase();
+                    const text = data.text.toLowerCase();
+
+                    // Match if the search term appears in code, description, or full text
+                    if (code.includes(searchTerm) || 
+                        description.includes(searchTerm) || 
+                        text.includes(searchTerm)) {
                         return data;
                     }
 
-                    // Return `null` if the term should not be displayed
+                    // Return null if no match
                     return null;
+                },
+                templateResult: function(data) {
+                    if (!data.id) return data.text;
+                    
+                    // Format the dropdown option with code and description
+                    const $container = $(`
+                        <div class="select2-result-option">
+                            <strong>${data.code}</strong>
+                            ${data.description ? ` - ${data.description}` : ''}
+                        </div>
+                    `);
+                    
+                    return $container;
+                },
+                templateSelection: function(data) {
+                    if (!data.id) return data.text;
+                    return data.text;
                 }
             });
+
+            // Add custom styles for the dropdown
+            const style = document.createElement('style');
+            style.textContent = `
+                .select2-result-option {
+                    padding: 6px;
+                    line-height: 1.4;
+                }
+                .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
+                    background-color: #673ab7;
+                    color: white;
+                }
+                .select2-container--bootstrap-5 .select2-results__option {
+                    padding: 6px 12px;
+                    margin: 0;
+                    border-radius: 4px;
+                }
+                .select2-container--bootstrap-5 .select2-search--dropdown .select2-search__field {
+                    padding: 8px;
+                    border-radius: 4px;
+                }
+                .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
+                    background-color: #f3f0f7;
+                }
+            `;
+            document.head.appendChild(style);
         } else {
             // Keep other filters empty initially
             const optionsContainer = document.getElementById(`${column}Options`);
@@ -319,28 +486,69 @@ function populateFilters(filterValues) {
     });
 }
 
-// Populate filters with values
+// Populate filter options
 function populateFilterOptions(column, values) {
     const filter = document.getElementById(`${column}Filter`);
     if (!filter) return;
 
     let options;
     if (column === 'code') {
-        options = values.map(code => ({
-            id: code,
-            text: state.codeDescriptionMap[code] ? 
-                `${code} - ${state.codeDescriptionMap[code]}` : 
-                code
-        }));
+        // Get unique code-description pairs with counts
+        const codeDescriptionPairs = state.allData.reduce((pairs, item) => {
+            if (item.code) {
+                if (!pairs.has(item.code)) {
+                    pairs.set(item.code, {
+                        code: item.code,
+                        description: item.description || '',
+                        count: 1
+                    });
+                } else {
+                    const pair = pairs.get(item.code);
+                    pair.count++;
+                }
+            }
+            return pairs;
+        }, new Map());
+
+        options = Array.from(codeDescriptionPairs.values())
+            .map(({ code, description, count }) => ({
+                id: code,
+                text: description ? `${code} - ${description} (${count})` : `${code} (${count})`,
+                count: count
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id));
     } else {
-        options = values
-            .filter(value => value !== null && value !== '')
-            .map(value => String(value)) // Convert all values to strings
-            .sort()
-            .map(value => ({
+        // Count occurrences for other filters
+        const valueCounts = values.reduce((counts, value) => {
+            if (value !== null && value !== '') {
+                const stringValue = String(value);
+                // Filter the data based on current selections
+                const filteredData = state.allData.filter(item => {
+                    for (const [filterName, filterValue] of Object.entries(state.filters)) {
+                        if (filterName === column) continue;
+                        if (filterValue && (
+                            (Array.isArray(filterValue) && filterValue.length > 0 && !filterValue.includes(String(item[filterName]))) ||
+                            (!Array.isArray(filterValue) && filterValue !== String(item[filterName]))
+                        )) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+                
+                const count = filteredData.filter(item => String(item[column]) === stringValue).length;
+                counts.set(stringValue, count);
+            }
+            return counts;
+        }, new Map());
+
+        options = Array.from(valueCounts.entries())
+            .map(([value, count]) => ({
                 id: value,
-                text: value
-            }));
+                text: `${value} (${count})`,
+                count: count
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id));
     }
     
     $(filter).empty();
@@ -351,8 +559,55 @@ function populateFilterOptions(column, values) {
         allowClear: true,
         multiple: column !== 'code',
         closeOnSelect: column === 'code',
-        data: options
+        data: options,
+        templateResult: function(data) {
+            if (!data.id) return data.text; // Skip placeholder
+            return $('<span>').html(data.text);
+        },
+        templateSelection: function(data) {
+            if (!data.id) return data.text; // Skip placeholder
+            
+            // For selected items, show with count
+            if (column === 'code') {
+                // For code, show code - description (count)
+                return data.text;
+            } else {
+                // For other filters, show value (count)
+                const option = options.find(opt => opt.id === data.id);
+                return option ? `${option.id} (${option.count})` : data.id;
+            }
+        }
     });
+
+    // Style the selected items to match the dropdown style
+    const style = document.createElement('style');
+    style.textContent = `
+        .select2-selection__choice {
+            background-color: #673ab7 !important;
+            color: white !important;
+            border: none !important;
+            padding: 2px 8px !important;
+        }
+        
+        .select2-selection__choice__display {
+            color: white !important;
+            padding: 0 !important;
+        }
+        
+        .select2-selection__choice__remove {
+            color: white !important;
+            border: none !important;
+            background: transparent !important;
+            padding: 0 4px !important;
+            margin-right: 4px !important;
+        }
+        
+        .select2-selection__choice__remove:hover {
+            background-color: rgba(255, 255, 255, 0.2) !important;
+            color: #e0e0e0 !important;
+        }
+    `;
+    document.head.appendChild(style);
 }
 
 // Update filters based on checkbox selections
@@ -404,27 +659,62 @@ async function updateDependentFilters(changedFilter) {
             if (selectedRegions.length > 0) {
                 // Filter cities based on selected regions
                 filteredData = filteredData.filter(item => selectedRegions.includes(String(item.region)));
-                const uniqueCities = [...new Set(filteredData.map(item => String(item.city)))].filter(Boolean).sort();
+                const uniqueCities = [...new Set(filteredData.map(item => String(item.city)))].filter(Boolean);
                 
-                // Update city filter
+                // Get counts for cities
+                const cityCounts = uniqueCities.map(city => ({
+                    id: city,
+                    count: filteredData.filter(item => String(item.city) === city).length
+                }));
+                
+                // Update city filter with counts
+                const cityOptions = cityCounts
+                    .map(({ id, count }) => ({
+                        id,
+                        text: `${id} (${count})`,
+                        count: count
+                    }))
+                    .sort((a, b) => a.id.localeCompare(b.id));
+
                 const cityFilter = $('#cityFilter');
                 const currentSelectedCities = cityFilter.val() || [];
-                const validSelectedCities = currentSelectedCities.filter(city => uniqueCities.includes(city));
-                
-                // Update city options and selection
-                populateFilterOptions('city', uniqueCities);
+                const validSelectedCities = currentSelectedCities.filter(city => 
+                    uniqueCities.includes(city)
+                );
+
+                cityFilter.empty();
+                cityFilter.select2({
+                    theme: 'bootstrap-5',
+                    width: '100%',
+                    placeholder: 'Select City...',
+                    allowClear: true,
+                    multiple: true,
+                    data: cityOptions,
+                    templateResult: function(data) {
+                        if (!data.id) return data.text;
+                        return $('<span>').html(data.text);
+                    },
+                    templateSelection: function(data) {
+                        if (!data.id) return data.text;
+                        const option = cityOptions.find(opt => opt.id === data.id);
+                        return option ? `${option.id} (${option.count})` : data.id;
+                    }
+                });
+
                 if (validSelectedCities.length > 0) {
                     cityFilter.val(validSelectedCities).trigger('change');
-                } else {
-                    cityFilter.val(null).trigger('change');
                 }
                 state.filters.city = validSelectedCities;
 
-                // Update payer_name options based on region selection
-                const uniquePayerNames = [...new Set(filteredData.map(item => String(item.payer_name)))].filter(Boolean).sort();
-                updateFilterOptions('payer_name', uniquePayerNames);
+                // Update payer_name options with counts
+                const uniquePayerNames = [...new Set(filteredData.map(item => String(item.payer_name)))].filter(Boolean);
+                const payerCounts = uniquePayerNames.map(payer => ({
+                    id: payer,
+                    count: filteredData.filter(item => String(item.payer_name) === payer).length
+                }));
+                
+                updateFilterOptions('payer_name', payerCounts.map(p => p.id));
             } else {
-                // Reset city and payer_name filters if no regions selected
                 resetDependentFilters(['city', 'payer_name', 'plan_name']);
                 filteredData = state.allData.filter(item => item.code === selectedCode);
             }
@@ -545,6 +835,15 @@ function updateTable() {
         'standard_charge_negotiated_dollar': 'Standard Charge Negotiated'
     };
 
+    // Calculate unique counts for each column
+    const uniqueCounts = {};
+    Object.keys(columnMap).forEach(key => {
+        const uniqueValues = new Set(state.filteredData.map(item => 
+            item[key] !== null && item[key] !== undefined ? String(item[key]) : ''
+        ).filter(Boolean));
+        uniqueCounts[key] = uniqueValues.size;
+    });
+
     // Setup table headers with sort buttons
     const headerRow = document.createElement('tr');
     Object.entries(columnMap).forEach(([key, headerText]) => {
@@ -584,15 +883,30 @@ function updateTable() {
     tableHeader.innerHTML = '';
     tableHeader.appendChild(headerRow);
 
+    // Add summary row right after header
+    const summaryRow = document.createElement('tr');
+    summaryRow.className = 'summary-row';
+    Object.keys(columnMap).forEach(key => {
+        const td = document.createElement('td');
+        td.innerHTML = `
+            <strong>${uniqueCounts[key].toLocaleString()}</strong>
+            <span class="summary-label">unique</span>
+        `;
+        summaryRow.appendChild(td);
+    });
+    tableHeader.appendChild(summaryRow);
+
     // Use DocumentFragment for better performance
     const fragment = document.createDocumentFragment();
+    
+    // Add data rows
     state.currentData.forEach(item => {
         const row = document.createElement('tr');
         Object.keys(columnMap).forEach(key => {
             const td = document.createElement('td');
             const value = item[key];
-            td.textContent = formatValue(value);
-            if (typeof value === 'number' || (value && !isNaN(value))) {
+            td.textContent = formatValue(value, key);
+            if (key !== 'code' && (typeof value === 'number' || (value && !isNaN(value)))) {
                 td.className = 'text-end';
             }
             row.appendChild(td);
@@ -744,18 +1058,17 @@ function formatColumnName(column) {
 }
 
 // Helper function to format values
-function formatValue(value) {
+function formatValue(value, columnName = '') {
     if (value === null || value === undefined) return '';
     
-    // Return code values as is without formatting
-    if (typeof value === 'string' && value.includes('code')) {
-        return value;
+    // Handle code values without any numeric formatting
+    if (columnName === 'code') {
+        return String(value);
     }
 
     // Handle monetary values
     if (typeof value === 'number' || (typeof value === 'string' && !isNaN(value))) {
         const num = parseFloat(value);
-        const columnName = Object.entries(state.currentData[0] || {}).find(([_, v]) => v === value)?.[0] || '';
         
         // Format monetary values
         if (columnName.toLowerCase().includes('charge') || 
@@ -770,12 +1083,10 @@ function formatValue(value) {
         }
         
         // Format other numeric values
-        if (!columnName.toLowerCase().includes('code')) {
-            return new Intl.NumberFormat('en-US', {
-                minimumFractionDigits: 0,
-                maximumFractionDigits: 2
-            }).format(num);
-        }
+        return new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2
+        }).format(num);
     }
     
     return String(value);
@@ -1085,6 +1396,26 @@ tableStyles.textContent = `
     
     .table tbody tr:hover {
         background-color: rgba(0, 0, 0, 0.075);
+    }
+
+    .summary-row {
+        background-color: #f8f9fa !important;
+        font-weight: 500;
+        border-bottom: 2px solid #000;
+    }
+
+    .summary-row td {
+        text-align: center !important;
+        font-size: 0.9em;
+        color: #673ab7;
+        padding: 4px 8px !important;
+    }
+
+    .summary-label {
+        font-size: 0.8em;
+        display: block;
+        color: #666;
+        margin-top: 2px;
     }
 
     .btn-sort {
