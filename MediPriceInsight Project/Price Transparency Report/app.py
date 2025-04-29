@@ -118,9 +118,13 @@ def get_report():
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
+        # Get pagination parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 100))
+        offset = (page - 1) * per_page
+
         # Get filter parameters
-        code = request.args.get('code')
-        fields = request.args.get('fields')
+        code_search = request.args.get('code')  # This will now be used for both code and description search
         city = request.args.get('city')
         region = request.args.get('region')
         payer_name = request.args.get('payer_name')
@@ -131,9 +135,10 @@ def get_report():
             conditions = []
             params = []
             
-            if code:
-                conditions.append("code = %s")
-                params.append(code)
+            if code_search:
+                conditions.append("(code ILIKE %s OR description ILIKE %s)")
+                search_pattern = f"%{code_search}%"
+                params.extend([search_pattern, search_pattern])
             if city:
                 conditions.append("city = %s")
                 params.append(city)
@@ -149,44 +154,48 @@ def get_report():
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-            # Determine which fields to fetch
-            if fields:
-                select_fields = ', '.join(fields.split(','))
-            else:
-                select_fields = """
-                    id, hospital_name, code, description,
-                    hospital_address, city, region,
-                    payer_name, plan_name,
-                    standard_charge_min, standard_charge_max,
-                    standard_charge_gross, standard_charge_negotiated_dollar
-                """
-
-            # Execute query without pagination when code is specified
-            query = f"""
-                SELECT {select_fields}
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(*)
                 FROM public.hospital_dataset
                 WHERE {where_clause}
-                ORDER BY hospital_name, payer_name, plan_name
             """
-            
-            cur.execute(query, params)
-            results = cur.fetchall()
+            cur.execute(count_query, params)
+            total_count = cur.fetchone()['count']
+
+            # Get paginated data
+            if total_count > 0:
+                data_query = f"""
+                    SELECT 
+                        id, hospital_name, code, description,
+                        hospital_address, city, region,
+                        payer_name, plan_name,
+                        standard_charge_min, standard_charge_max,
+                        standard_charge_gross, standard_charge_negotiated_dollar
+                    FROM public.hospital_dataset
+                    WHERE {where_clause}
+                    ORDER BY hospital_name, payer_name, plan_name
+                    LIMIT %s OFFSET %s
+                """
+                params.extend([per_page, offset])
+                cur.execute(data_query, params)
+                results = cur.fetchall()
+            else:
+                results = []
 
             duration = time.time() - start_time
             logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
             
             return jsonify({
-                'status': 'success',
                 'data': results,
-                'count': len(results)
+                'total': total_count,
+                'page': page,
+                'per_page': per_page,
+                'total_pages': (total_count + per_page - 1) // per_page
             })
     except Exception as e:
         logger.error(f"Error fetching report data: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': 'Failed to fetch report data',
-            'error': str(e)
-        }), 500
+        return jsonify({'error': str(e)}), 500
     finally:
         if conn:
             conn.close()
