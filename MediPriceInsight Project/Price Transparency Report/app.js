@@ -51,7 +51,8 @@ const state = {
     lastFetchTime: 0,
     sortColumn: null,
     sortDirection: 'asc',
-    codeDescriptionMap: {}
+    codeDescriptionMap: {},
+    descriptionsLoaded: false
 };
 
 // Initialize the page
@@ -129,98 +130,143 @@ async function setupFilters() {
     try {
         console.log('Starting filter setup...');
         
-        // First fetch distinct codes and other filter values
-        console.log('Fetching filters...');
-        const codesResponse = await fetch(`${FILTERS_ENDPOINT}`);
+        // First fetch distinct codes and descriptions
+        console.log('Fetching codes and descriptions...');
+        const codesResponse = await fetch(`${API_ENDPOINT}/codes`);
         if (!codesResponse.ok) throw new Error('Failed to fetch codes');
         const codesData = await codesResponse.json();
         
-        console.log('Received filter data:', {
-            codesCount: codesData.code?.length || 0,
-            regionsCount: codesData.region?.length || 0,
-            citiesCount: codesData.city?.length || 0
+        console.log('Received codes data:', {
+            count: codesData.data?.length || 0
         });
 
-        // Fetch descriptions for all codes in a single query
-        if (codesData.code && codesData.code.length > 0) {
-            console.log('Fetching descriptions for all codes...');
-            const codes = codesData.code.join(',');
-            const descriptionResponse = await fetch(`${API_ENDPOINT}?codes=${codes}`);
-            if (!descriptionResponse.ok) throw new Error('Failed to fetch descriptions');
-            const descriptionData = await descriptionResponse.json();
+        // Create filter values object with codes
+        const filterValues = {
+            code: [],
+            region: [],
+            city: [],
+            payer_name: [],
+            plan_name: []
+        };
 
-            // Create a map of code descriptions
-            const descriptionMap = new Map();
-            if (descriptionData.data) {
-                descriptionData.data.forEach(item => {
-                    if (item.code && !descriptionMap.has(item.code)) {
-                        descriptionMap.set(item.code, item.description || '');
+        // Create uniqueCodes map with descriptions
+        const uniqueCodes = new Map();
+        if (codesData.data) {
+            codesData.data.forEach(item => {
+                if (item.code) {
+                    uniqueCodes.set(item.code, {
+                        code: item.code,
+                        description: item.description || ''
+                    });
+                    filterValues.code.push(item.code);
+                }
+            });
+        }
+
+        // Sort codes alphanumerically
+        filterValues.code.sort((a, b) => {
+            // Extract numeric and non-numeric parts
+            const aMatch = a.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
+            const bMatch = b.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
+            
+            if (!aMatch || !bMatch) return a.localeCompare(b);
+            
+            // Compare parts
+            for (let i = 1; i < 5; i++) {
+                const aPart = aMatch[i] || '';
+                const bPart = bMatch[i] || '';
+                
+                if (i % 2 === 0) {
+                    // Compare numeric parts
+                    const aNum = parseInt(aPart || '0', 10);
+                    const bNum = parseInt(bPart || '0', 10);
+                    if (aNum !== bNum) return aNum - bNum;
+                } else {
+                    // Compare non-numeric parts
+                    if (aPart !== bPart) return aPart.localeCompare(bPart);
+                }
+            }
+            return 0;
+        });
+
+        // Setup UI with codes and descriptions
+        setupDynamicFilters(Object.keys(filterValues));
+        populateFilters(filterValues, uniqueCodes);
+
+        // Add event listener for code selection
+        const codeFilter = document.getElementById('codeFilter');
+        if (codeFilter) {
+            $(codeFilter).on('select2:select', async function(e) {
+                const selectedCode = e.params.data.id;
+                if (selectedCode) {
+                    showLoading();
+                    try {
+                        // Fetch full data for the selected code
+                        const response = await fetch(`${API_ENDPOINT}?code=${selectedCode}`);
+                        if (!response.ok) throw new Error('Failed to fetch data');
+                        const data = await response.json();
+                        
+                        // Update state with the fetched data
+                        state.allData = data.data || [];
+                        
+                        // Extract unique values for other filters
+                        const uniqueValues = {
+                            region: new Set(),
+                            city: new Set(),
+                            payer_name: new Set(),
+                            plan_name: new Set()
+                        };
+                        
+                        state.allData.forEach(item => {
+                            if (item.region) uniqueValues.region.add(String(item.region));
+                            if (item.city) uniqueValues.city.add(String(item.city));
+                            if (item.payer_name) uniqueValues.payer_name.add(String(item.payer_name));
+                            if (item.plan_name) uniqueValues.plan_name.add(String(item.plan_name));
+                        });
+                        
+                        // Update filter values
+                        Object.keys(uniqueValues).forEach(key => {
+                            filterValues[key] = Array.from(uniqueValues[key]).sort();
+                        });
+                        
+                        // Update other dropdowns
+                        updateDependentFilters('code');
+                        applyFilters();
+                        updateTable();
+                    } catch (error) {
+                        console.error('Error fetching data:', error);
+                        showError('Failed to load data for the selected code');
+                    } finally {
+                        hideLoading();
+                    }
+                }
+            });
+
+            // Handle clear event
+            $(codeFilter).on('select2:clear', function() {
+                // Reset all data and filters
+                state.allData = [];
+                state.filteredData = [];
+                state.currentData = [];
+                
+                // Reset other filter values
+                ['region', 'city', 'payer_name', 'plan_name'].forEach(key => {
+                    filterValues[key] = [];
+                    const filter = $(`#${key}Filter`);
+                    if (filter.length) {
+                        filter.val(null).trigger('change');
                     }
                 });
-            }
-
-            console.log('Description map created with size:', descriptionMap.size);
-
-            // Create a map of unique codes with descriptions
-            const uniqueCodes = new Map();
-            codesData.code.forEach(code => {
-                if (code && !uniqueCodes.has(code)) {
-                    uniqueCodes.set(code, {
-                        code: code,
-                        description: descriptionMap.get(code) || ''
-                    });
-                }
-            });
-
-            console.log('Codes mapped with descriptions:', uniqueCodes.size);
-            console.log('Sample codes with descriptions:', 
-                Array.from(uniqueCodes.entries())
-                    .slice(0, 5)
-                    .map(([code, data]) => `${code}: ${data.description}`)
-            );
-
-            // Create filter values object
-            const filterValues = {
-                code: Array.from(uniqueCodes.keys()),
-                region: codesData.region || [],
-                city: codesData.city || [],
-                payer_name: codesData.payer_name || [],
-                plan_name: codesData.plan_name || []
-            };
-
-            // Sort codes alphanumerically
-            filterValues.code.sort((a, b) => {
-                // Extract numeric and non-numeric parts
-                const aMatch = a.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
-                const bMatch = b.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
                 
-                if (!aMatch || !bMatch) return a.localeCompare(b);
-                
-                // Compare parts
-                for (let i = 1; i < 5; i++) {
-                    const aPart = aMatch[i] || '';
-                    const bPart = bMatch[i] || '';
-                    
-                    if (i % 2 === 0) {
-                        // Compare numeric parts
-                        const aNum = parseInt(aPart || '0', 10);
-                        const bNum = parseInt(bPart || '0', 10);
-                        if (aNum !== bNum) return aNum - bNum;
-                    } else {
-                        // Compare non-numeric parts
-                        if (aPart !== bPart) return aPart.localeCompare(bPart);
-                    }
-                }
-                return 0;
+                // Update table
+                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
             });
-
-            setupDynamicFilters(Object.keys(filterValues));
-            populateFilters(filterValues, uniqueCodes);
-        } else {
-            console.warn('No codes found in filter data');
         }
+
     } catch (error) {
         console.error('Error in setupFilters:', error);
+        hideLoading();
+        showError('Failed to load codes and descriptions');
         throw error;
     }
 }
@@ -431,57 +477,19 @@ function populateFilters(filterValues, uniqueCodes) {
 
                     // Return null if no match
                     return null;
-                },
-                templateResult: function(data) {
-                    if (!data.id) return data.text;
-                    
-                    // Format the dropdown option with code and description
-                    const $container = $(`
-                        <div class="select2-result-option">
-                            <strong>${data.code}</strong>
-                            ${data.description ? ` - ${data.description}` : ''}
-                        </div>
-                    `);
-                    
-                    return $container;
-                },
-                templateSelection: function(data) {
-                    if (!data.id) return data.text;
-                    return data.text;
                 }
             });
-
-            // Add custom styles for the dropdown
-            const style = document.createElement('style');
-            style.textContent = `
-                .select2-result-option {
-                    padding: 6px;
-                    line-height: 1.4;
-                }
-                .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
-                    background-color: #673ab7;
-                    color: white;
-                }
-                .select2-container--bootstrap-5 .select2-results__option {
-                    padding: 6px 12px;
-                    margin: 0;
-                    border-radius: 4px;
-                }
-                .select2-container--bootstrap-5 .select2-search--dropdown .select2-search__field {
-                    padding: 8px;
-                    border-radius: 4px;
-                }
-                .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
-                    background-color: #f3f0f7;
-                }
-            `;
-            document.head.appendChild(style);
         } else {
-            // Keep other filters empty initially
-            const optionsContainer = document.getElementById(`${column}Options`);
-            if (optionsContainer) {
-                optionsContainer.innerHTML = '';
-            }
+            // For other filters, initialize with empty state
+            $(filter).empty().append('<option></option>');
+            $(filter).select2({
+                theme: 'bootstrap-5',
+                width: '100%',
+                placeholder: `Select ${formatColumnName(column)}...`,
+                allowClear: true,
+                multiple: true,
+                data: []  // Start with empty data
+            });
         }
     });
 }
