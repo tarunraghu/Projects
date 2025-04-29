@@ -134,19 +134,14 @@ async function setupFilters() {
         const filterValues = await response.json();
         console.log('Filter values:', filterValues);
 
-        // Fetch descriptions for codes
-        const descriptionResponse = await fetch(`${API_ENDPOINT}?per_page=1000`);
-        if (!descriptionResponse.ok) throw new Error('Failed to fetch descriptions');
+        // Fetch initial data to get code-description pairs
+        const initialDataResponse = await fetch(`${API_ENDPOINT}?per_page=1000`);
+        if (!initialDataResponse.ok) throw new Error('Failed to fetch initial data');
         
-        const descriptionData = await descriptionResponse.json();
-        const codeDescriptionMap = {};
-        descriptionData.data.forEach(item => {
-            if (item.code && item.description) {
-                codeDescriptionMap[item.code] = item.description;
-            }
-        });
+        const initialData = await initialDataResponse.json();
+        state.allData = initialData.data;
         
-        state.codeDescriptionMap = codeDescriptionMap;
+        console.log('Initial data loaded:', state.allData.length, 'records');
         setupDynamicFilters(Object.keys(filterValues));
         populateFilters(filterValues);
     } catch (error) {
@@ -176,7 +171,8 @@ async function fetchData(page = 1, isInitialLoad = false) {
             if (!response.ok) throw new Error('Failed to fetch data');
             const result = await response.json();
             state.allData = result.data;
-            applyFilters(); // This will update filteredData
+            console.log('Fetched data with descriptions:', state.allData);
+            applyFilters();
         }
         
         state.lastFetchTime = now;
@@ -257,7 +253,7 @@ function createFilterElement(column, isMandatory) {
 
 // Populate filters with values
 function populateFilters(filterValues) {
-    console.log('Populating filters with values...');
+    console.log('Populating filters with values:', filterValues);
     state.filterOptions = filterValues;
     
     Object.entries(filterValues).forEach(([column, values]) => {
@@ -268,13 +264,27 @@ function populateFilters(filterValues) {
         }
 
         if (column === 'code') {
+            // Get unique code-description pairs from the current data
+            const codeDescriptionPairs = state.allData.reduce((pairs, item) => {
+                if (item.code && !pairs.has(item.code)) {
+                    pairs.set(item.code, {
+                        code: item.code,
+                        description: item.description || ''
+                    });
+                }
+                return pairs;
+            }, new Map());
+
             // Format options to include both code and description
-            const options = values.map(code => ({
-                id: code,
-                text: state.codeDescriptionMap[code] ? 
-                    `${code} - ${state.codeDescriptionMap[code]}` : 
-                    code
-            }));
+            const options = Array.from(codeDescriptionPairs.values())
+                .map(({ code, description }) => ({
+                    id: code,
+                    text: description ? `${code} - ${description}` : code
+                }))
+                .sort((a, b) => a.id.localeCompare(b.id));
+
+            console.log('Code-description pairs:', Array.from(codeDescriptionPairs.values()));
+            console.log('Formatted options:', options);
             
             $(filter).empty().append('<option></option>');
             $(filter).select2({
@@ -290,7 +300,8 @@ function populateFilters(filterValues) {
                     }
 
                     // Search in both code and description
-                    if (data.text.toLowerCase().indexOf(params.term.toLowerCase()) > -1) {
+                    const searchTerm = params.term.toLowerCase();
+                    if (data.text.toLowerCase().indexOf(searchTerm) > -1) {
                         return data;
                     }
 
