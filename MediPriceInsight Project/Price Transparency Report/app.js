@@ -40,6 +40,8 @@ const DEBOUNCE_DELAY = 300;
 // State management
 const state = {
     currentData: [],
+    filteredData: [],
+    allData: [],
     filters: {},
     filterOptions: {},
     currentPage: 1,
@@ -48,22 +50,48 @@ const state = {
     isLoading: false,
     lastFetchTime: 0,
     sortColumn: null,
-    sortDirection: 'asc'
+    sortDirection: 'asc',
+    codeDescriptionMap: {}
 };
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', async () => {
     try {
+        // Wrap the table in a container
+        const tableResponsive = document.querySelector('.table-responsive');
+        const tableContainer = document.createElement('div');
+        tableContainer.className = 'table-container';
+        tableResponsive.parentNode.insertBefore(tableContainer, tableResponsive);
+        tableContainer.appendChild(tableResponsive);
+
+        // Add filter-container class
+        const filterContainer = document.getElementById('filterContainer');
+        filterContainer.className = 'filter-container row';
+
+        // Add dropdown state management
+        document.addEventListener('show.bs.dropdown', function(e) {
+            const filterContainer = e.target.closest('.filter-container');
+            if (filterContainer) {
+                filterContainer.style.zIndex = '1500';
+            }
+        });
+
+        document.addEventListener('hidden.bs.dropdown', function(e) {
+            const filterContainer = e.target.closest('.filter-container');
+            if (filterContainer) {
+                filterContainer.style.zIndex = '1';
+            }
+        });
+
         showLoading();
         await setupFilters();
-        await fetchData();
         setupEventListeners();
-        updateTable();
+        hideLoading();
+        
+        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
     } catch (error) {
         console.error('Error during initialization:', error);
         showError('Failed to initialize the application. Please try again later.');
-    } finally {
-        hideLoading();
     }
 });
 
@@ -105,7 +133,20 @@ async function setupFilters() {
         
         const filterValues = await response.json();
         console.log('Filter values:', filterValues);
+
+        // Fetch descriptions for codes
+        const descriptionResponse = await fetch(`${API_ENDPOINT}?per_page=1000`);
+        if (!descriptionResponse.ok) throw new Error('Failed to fetch descriptions');
         
+        const descriptionData = await descriptionResponse.json();
+        const codeDescriptionMap = {};
+        descriptionData.data.forEach(item => {
+            if (item.code && item.description) {
+                codeDescriptionMap[item.code] = item.description;
+            }
+        });
+        
+        state.codeDescriptionMap = codeDescriptionMap;
         setupDynamicFilters(Object.keys(filterValues));
         populateFilters(filterValues);
     } catch (error) {
@@ -115,9 +156,9 @@ async function setupFilters() {
 }
 
 // Fetch data from the backend
-async function fetchData(page = 1) {
+async function fetchData(page = 1, isInitialLoad = false) {
     const now = Date.now();
-    if (now - state.lastFetchTime < DEBOUNCE_DELAY) {
+    if (!isInitialLoad && now - state.lastFetchTime < DEBOUNCE_DELAY) {
         console.log('Throttling API call');
         return;
     }
@@ -126,25 +167,21 @@ async function fetchData(page = 1) {
         showLoading();
         console.log('Fetching data from API...');
         
-        const queryParams = new URLSearchParams({
-            page: page,
-            per_page: state.perPage,
-            ...Object.fromEntries(Object.entries(state.filters).filter(([_, value]) => value !== ''))
-        });
-
-        const response = await fetch(`${API_ENDPOINT}?${queryParams}`);
-        if (!response.ok) throw new Error('Failed to fetch data');
+        if (isInitialLoad) {
+            // On initial load, fetch all data for the selected code
+            const response = await fetch(`${API_ENDPOINT}?${new URLSearchParams({
+                code: state.filters.code
+            })}`);
+            
+            if (!response.ok) throw new Error('Failed to fetch data');
+            const result = await response.json();
+            state.allData = result.data;
+            applyFilters(); // This will update filteredData
+        }
         
-        const result = await response.json();
-        state.currentData = result.data;
-        state.totalPages = result.total_pages;
-        state.currentPage = page;
-        
-        console.log(`Fetched ${state.currentData.length} rows (page ${page} of ${state.totalPages})`);
         state.lastFetchTime = now;
-        
         updatePagination();
-        return result;
+        return { data: state.filteredData };
     } catch (error) {
         console.error('Error in fetchData:', error);
         showError('Failed to load data. Please try again later.');
@@ -171,94 +208,50 @@ function setupDynamicFilters(columns) {
 // Create a filter element
 function createFilterElement(column, isMandatory) {
     const filterCol = document.createElement('div');
-    filterCol.className = 'col-md-4 mb-3';
+    filterCol.className = 'col-md-4 mb-3 filter-row';
     
     const label = document.createElement('label');
     label.className = 'form-label';
     label.textContent = column === 'code' ? 'Code or Description *' : formatColumnName(column);
     label.htmlFor = `${column}Filter`;
 
-    if (column === 'code') {
-        // Create searchable dropdown for code
-        const select = document.createElement('select');
-        select.className = 'form-select';
-        select.id = `${column}Filter`;
-        
-        filterCol.appendChild(label);
-        filterCol.appendChild(select);
+    // Create select element for all filters
+    const select = document.createElement('select');
+    select.className = 'form-select';
+    select.id = `${column}Filter`;
+    if (column !== 'code') {
+        select.multiple = true;
+    }
+    
+    filterCol.appendChild(label);
+    filterCol.appendChild(select);
 
-        $(select).select2({
-            theme: 'bootstrap-5',
-            width: '100%',
-            placeholder: 'Search by code or description...',
-            allowClear: true
-        });
-    } else {
-        // Create multi-select container for other filters
-        const filterContainer = document.createElement('div');
-        filterContainer.className = 'multi-select-container';
-        filterContainer.id = `${column}Container`;
+    // Initialize Select2 with appropriate configuration
+    $(select).select2({
+        theme: 'bootstrap-5',
+        width: '100%',
+        placeholder: column === 'code' ? 'Search by code...' : `Select ${formatColumnName(column)}...`,
+        allowClear: true,
+        multiple: column !== 'code',
+        closeOnSelect: column === 'code',
+        selectionCssClass: 'select2--small',
+        dropdownCssClass: 'select2--small',
+        templateResult: function(data) {
+            if (!data.id) return data.text;
+            return $('<span>').text(data.text);
+        }
+    });
 
-        // Add select all option
-        const selectAllDiv = document.createElement('div');
-        selectAllDiv.className = 'form-check mb-2';
-        
-        const selectAllInput = document.createElement('input');
-        selectAllInput.type = 'checkbox';
-        selectAllInput.className = 'form-check-input select-all';
-        selectAllInput.id = `${column}SelectAll`;
-        
-        const selectAllLabel = document.createElement('label');
-        selectAllLabel.className = 'form-check-label';
-        selectAllLabel.htmlFor = `${column}SelectAll`;
-        selectAllLabel.textContent = 'Select All';
-        
-        selectAllDiv.appendChild(selectAllInput);
-        selectAllDiv.appendChild(selectAllLabel);
-        
-        // Add search input for options
-        const searchInput = document.createElement('input');
-        searchInput.type = 'text';
-        searchInput.className = 'form-control mb-2';
-        searchInput.placeholder = `Search ${formatColumnName(column)}...`;
-        
-        // Add options container
-        const optionsContainer = document.createElement('div');
-        optionsContainer.className = 'options-container';
-        optionsContainer.id = `${column}Options`;
-        
-        filterContainer.appendChild(selectAllDiv);
-        filterContainer.appendChild(searchInput);
-        filterContainer.appendChild(optionsContainer);
-        
-        filterCol.appendChild(label);
-        filterCol.appendChild(filterContainer);
-
-        // Add search functionality
-        searchInput.addEventListener('input', (e) => {
-            const searchText = e.target.value.toLowerCase();
-            const options = optionsContainer.querySelectorAll('.form-check');
-            options.forEach(option => {
-                const text = option.textContent.toLowerCase();
-                option.style.display = text.includes(searchText) ? '' : 'none';
-            });
-        });
-
-        // Add select all functionality
-        selectAllInput.addEventListener('change', (e) => {
-            const options = optionsContainer.querySelectorAll('.form-check-input:not(.select-all)');
-            options.forEach(option => {
-                if (option.parentElement.style.display !== 'none') {
-                    option.checked = e.target.checked;
-                }
-            });
+    // Add event listeners for Select2
+    if (column !== 'code') {
+        $(select).on('select2:select select2:unselect', function(e) {
+            const values = $(this).val() || [];
+            state.filters[column] = values;
             updateFilters(column);
         });
     }
-    
-    filterContainer.appendChild(filterCol);
 
-    // Initialize filter state
+    filterContainer.appendChild(filterCol);
     state.filters[column] = column === 'code' ? '' : [];
 }
 
@@ -278,7 +271,9 @@ function populateFilters(filterValues) {
             // Format options to include both code and description
             const options = values.map(code => ({
                 id: code,
-                text: code // Initially just show the code, we'll update with descriptions later
+                text: state.codeDescriptionMap[code] ? 
+                    `${code} - ${state.codeDescriptionMap[code]}` : 
+                    code
             }));
             
             $(filter).empty().append('<option></option>');
@@ -287,76 +282,80 @@ function populateFilters(filterValues) {
                 width: '100%',
                 placeholder: 'Search by code or description...',
                 allowClear: true,
-                data: options
+                data: options,
+                matcher: function(params, data) {
+                    // If there are no search terms, return all of the data
+                    if ($.trim(params.term) === '') {
+                        return data;
+                    }
+
+                    // Search in both code and description
+                    if (data.text.toLowerCase().indexOf(params.term.toLowerCase()) > -1) {
+                        return data;
+                    }
+
+                    // Return `null` if the term should not be displayed
+                    return null;
+                }
             });
         } else {
             // Keep other filters empty initially
-            filter.innerHTML = '<option value="">All</option>';
+            const optionsContainer = document.getElementById(`${column}Options`);
+            if (optionsContainer) {
+                optionsContainer.innerHTML = '';
+            }
         }
     });
 }
 
 // Populate filters with values
 function populateFilterOptions(column, values) {
+    const filter = document.getElementById(`${column}Filter`);
+    if (!filter) return;
+
+    let options;
     if (column === 'code') {
-        const filter = document.getElementById(`${column}Filter`);
-        if (!filter) return;
-
-        const options = values.map(code => ({
+        options = values.map(code => ({
             id: code,
-            text: code
+            text: state.codeDescriptionMap[code] ? 
+                `${code} - ${state.codeDescriptionMap[code]}` : 
+                code
         }));
-        
-        $(filter).empty().append('<option></option>');
-        $(filter).select2({
-            theme: 'bootstrap-5',
-            width: '100%',
-            placeholder: 'Search by code or description...',
-            allowClear: true,
-            data: options
-        });
     } else {
-        const optionsContainer = document.getElementById(`${column}Options`);
-        if (!optionsContainer) return;
-
-        optionsContainer.innerHTML = '';
-        values.forEach(value => {
-            const optionDiv = document.createElement('div');
-            optionDiv.className = 'form-check';
-            
-            const input = document.createElement('input');
-            input.type = 'checkbox';
-            input.className = 'form-check-input';
-            input.id = `${column}-${value}`;
-            input.value = value;
-            
-            const label = document.createElement('label');
-            label.className = 'form-check-label';
-            label.htmlFor = `${column}-${value}`;
-            label.textContent = value;
-            
-            input.addEventListener('change', () => {
-                updateFilters(column);
-                updateSelectAllState(column);
-            });
-            
-            optionDiv.appendChild(input);
-            optionDiv.appendChild(label);
-            optionsContainer.appendChild(optionDiv);
-        });
+        options = values
+            .filter(value => value !== null && value !== '')
+            .map(value => String(value)) // Convert all values to strings
+            .sort()
+            .map(value => ({
+                id: value,
+                text: value
+            }));
     }
+    
+    $(filter).empty();
+    $(filter).select2({
+        theme: 'bootstrap-5',
+        width: '100%',
+        placeholder: column === 'code' ? 'Search by code...' : `Select ${formatColumnName(column)}...`,
+        allowClear: true,
+        multiple: column !== 'code',
+        closeOnSelect: column === 'code',
+        data: options
+    });
 }
 
 // Update filters based on checkbox selections
 function updateFilters(column) {
+    if (column === 'code') return;
+
     const optionsContainer = document.getElementById(`${column}Options`);
     if (!optionsContainer) return;
 
-    const selectedValues = Array.from(optionsContainer.querySelectorAll('.form-check-input:checked'))
+    const selectedValues = Array.from(optionsContainer.querySelectorAll('.form-check-input:checked:not(.select-all)'))
         .map(input => input.value);
     
     state.filters[column] = selectedValues;
-    updateDependentFilters(column);
+    updateSelectedText(column);
 }
 
 // Update select all checkbox state
@@ -378,67 +377,142 @@ async function updateDependentFilters(changedFilter) {
     const filterIndex = FILTER_ORDER.indexOf(changedFilter);
     if (filterIndex === -1) return;
 
-    // Clear all dependent filters
-    for (let i = filterIndex + 1; i < FILTER_ORDER.length; i++) {
-        const dependentFilter = FILTER_ORDER[i];
-        if (dependentFilter !== 'code') {
-            state.filters[dependentFilter] = [];
-            const optionsContainer = document.getElementById(`${dependentFilter}Options`);
-            if (optionsContainer) {
-                optionsContainer.innerHTML = '';
-            }
-            const selectAll = document.getElementById(`${dependentFilter}SelectAll`);
-            if (selectAll) {
-                selectAll.checked = false;
-                selectAll.indeterminate = false;
-            }
-        }
-    }
-
     try {
-        showLoading();
-        // Build query parameters based on selected filters
-        const queryParams = new URLSearchParams();
-        for (let i = 0; i <= filterIndex; i++) {
-            const filter = FILTER_ORDER[i];
-            const values = state.filters[filter];
-            if (Array.isArray(values)) {
-                values.forEach(value => queryParams.append(filter, value));
-            } else if (values) {
-                queryParams.append(filter, values);
-            }
-        }
-
-        const response = await fetch(`${API_ENDPOINT}?${queryParams}`);
-        if (!response.ok) throw new Error('Failed to fetch dependent filter data');
+        // Get current filtered data based on code selection
+        let filteredData = [...state.allData];
         
-        const result = await response.json();
-        const data = result.data;
-
-        if (!data || data.length === 0) {
-            console.warn('No data returned for the selected filters');
-            return;
+        // Filter data based on selected code first
+        const selectedCode = state.filters.code;
+        if (selectedCode) {
+            filteredData = filteredData.filter(item => item.code === selectedCode);
         }
+        
+        // Special handling for region-city dependency
+        if (changedFilter === 'region') {
+            const selectedRegions = state.filters.region || [];
+            if (selectedRegions.length > 0) {
+                // Filter cities based on selected regions
+                filteredData = filteredData.filter(item => selectedRegions.includes(String(item.region)));
+                const uniqueCities = [...new Set(filteredData.map(item => String(item.city)))].filter(Boolean).sort();
+                
+                // Update city filter
+                const cityFilter = $('#cityFilter');
+                const currentSelectedCities = cityFilter.val() || [];
+                const validSelectedCities = currentSelectedCities.filter(city => uniqueCities.includes(city));
+                
+                // Update city options and selection
+                populateFilterOptions('city', uniqueCities);
+                if (validSelectedCities.length > 0) {
+                    cityFilter.val(validSelectedCities).trigger('change');
+                } else {
+                    cityFilter.val(null).trigger('change');
+                }
+                state.filters.city = validSelectedCities;
 
-        // Update dependent filters with available values
-        for (let i = filterIndex + 1; i < FILTER_ORDER.length; i++) {
-            const dependentFilter = FILTER_ORDER[i];
-            if (dependentFilter !== 'code') {
-                const uniqueValues = [...new Set(data.map(item => item[dependentFilter]))].filter(Boolean).sort();
-                populateFilterOptions(dependentFilter, uniqueValues);
+                // Update payer_name options based on region selection
+                const uniquePayerNames = [...new Set(filteredData.map(item => String(item.payer_name)))].filter(Boolean).sort();
+                updateFilterOptions('payer_name', uniquePayerNames);
+            } else {
+                // Reset city and payer_name filters if no regions selected
+                resetDependentFilters(['city', 'payer_name', 'plan_name']);
+                filteredData = state.allData.filter(item => item.code === selectedCode);
             }
         }
+
+        // Update payer_name based on region and city selections
+        if (changedFilter === 'city' || changedFilter === 'region') {
+            let currentData = filteredData;
+            
+            // Apply region filter
+            const selectedRegions = state.filters.region || [];
+            if (selectedRegions.length > 0) {
+                currentData = currentData.filter(item => selectedRegions.includes(String(item.region)));
+            }
+            
+            // Apply city filter
+            const selectedCities = state.filters.city || [];
+            if (selectedCities.length > 0) {
+                currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
+            }
+            
+            // Update payer_name options
+            const uniquePayerNames = [...new Set(currentData.map(item => String(item.payer_name)))].filter(Boolean).sort();
+            updateFilterOptions('payer_name', uniquePayerNames);
+            
+            // Reset plan_name as it depends on payer_name
+            resetDependentFilters(['plan_name']);
+        }
+
+        // Update plan_name based on region, city, and payer_name selections
+        if (changedFilter === 'payer_name' || changedFilter === 'city' || changedFilter === 'region') {
+            let currentData = filteredData;
+            
+            // Apply all previous filters
+            const selectedRegions = state.filters.region || [];
+            if (selectedRegions.length > 0) {
+                currentData = currentData.filter(item => selectedRegions.includes(String(item.region)));
+            }
+            
+            const selectedCities = state.filters.city || [];
+            if (selectedCities.length > 0) {
+                currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
+            }
+            
+            const selectedPayerNames = state.filters.payer_name || [];
+            if (selectedPayerNames.length > 0) {
+                currentData = currentData.filter(item => selectedPayerNames.includes(String(item.payer_name)));
+            }
+            
+            // Update plan_name options
+            const uniquePlanNames = [...new Set(currentData.map(item => String(item.plan_name)))].filter(Boolean).sort();
+            updateFilterOptions('plan_name', uniquePlanNames);
+        }
+
+        // Apply filters and update table
+        applyFilters();
+        updateTable();
 
     } catch (error) {
         console.error('Error updating dependent filters:', error);
         showError('Failed to update filters. Please try again.');
-    } finally {
-        hideLoading();
     }
+}
+
+// Helper function to update filter options
+function updateFilterOptions(filterName, values) {
+    const filter = $(`#${filterName}Filter`);
+    const currentSelected = filter.val() || [];
+    
+    // Only keep currently selected values that are still valid
+    const validSelected = currentSelected.filter(value => values.includes(value));
+    
+    // Update options and selection
+    populateFilterOptions(filterName, values);
+    if (validSelected.length > 0) {
+        filter.val(validSelected).trigger('change');
+    } else {
+        filter.val(null).trigger('change');
+    }
+    
+    // Update state
+    state.filters[filterName] = validSelected;
+}
+
+// Helper function to reset dependent filters
+function resetDependentFilters(filterNames) {
+    filterNames.forEach(filterName => {
+        const filter = $(`#${filterName}Filter`);
+        if (filter.length) {
+            filter.val(null).trigger('change');
+            state.filters[filterName] = [];
+        }
+    });
 }
 
 // Update the table with filtered data
 function updateTable() {
+    console.time('updateTable');
+    
     if (!state.currentData.length) {
         reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">No data found for the selected filters</td></tr>';
         return;
@@ -450,8 +524,8 @@ function updateTable() {
         'description': 'Description',
         'hospital_name': 'Hospital Name',
         'hospital_address': 'Hospital Address',
-        'city': 'City',
         'region': 'Region',
+        'city': 'City',
         'payer_name': 'Payer Name',
         'plan_name': 'Plan Name',
         'standard_charge_min': 'Standard Charge Min',
@@ -517,6 +591,7 @@ function updateTable() {
 
     reportTableBody.innerHTML = '';
     reportTableBody.appendChild(fragment);
+    console.timeEnd('updateTable');
 }
 
 // Sort data function
@@ -544,30 +619,55 @@ function sortData() {
 
 // Setup event listeners
 function setupEventListeners() {
-    const debouncedFetchData = debounce(async () => {
-        await fetchData(1);
-        updateTable();
-    }, DEBOUNCE_DELAY);
-
     FILTER_ORDER.forEach(column => {
         if (column === 'code') {
             const filter = document.getElementById(`${column}Filter`);
             if (filter) {
                 $(filter).on('select2:select select2:clear', async (e) => {
                     state.filters[column] = e.type === 'select2:clear' ? '' : e.params?.data?.id || '';
+                    
+                    if (e.type === 'select2:clear') {
+                        // Clear everything
+                        state.currentData = [];
+                        state.filteredData = [];
+                        state.allData = [];
+                        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
+                        resetDependentFilters(['region', 'city', 'payer_name', 'plan_name']);
+                    } else {
+                        // Fetch all data for the selected code
+                        await fetchData(1, true);
+                        
+                        // Update region options based on the selected code
+                        const uniqueRegions = [...new Set(state.allData.map(item => String(item.region)))].filter(Boolean).sort();
+                        updateFilterOptions('region', uniqueRegions);
+                        
+                        // Reset other dependent filters
+                        resetDependentFilters(['city', 'payer_name', 'plan_name']);
+                        
+                        updateTable();
+                    }
+                });
+            }
+        } else {
+            const filter = document.getElementById(`${column}Filter`);
+            if (filter) {
+                $(filter).on('select2:select select2:unselect', async function(e) {
+                    const values = $(this).val() || [];
+                    state.filters[column] = values;
                     await updateDependentFilters(column);
-                    await debouncedFetchData();
                 });
             }
         }
     });
 
-    // Add global change event listener for checkbox changes
+    // Update checkbox change event listener for instant filtering
     document.addEventListener('change', async (e) => {
         if (e.target.matches('.form-check-input') && !e.target.matches('.select-all')) {
             const column = e.target.id.split('-')[0];
-            if (FILTER_ORDER.includes(column) && column !== 'code') {
-                await debouncedFetchData();
+            if (FILTER_ORDER.includes(column) && column !== 'code' && state.filters.code) {
+                updateFilters(column);
+                applyFilters();
+                updateTable();
             }
         }
     });
@@ -617,9 +717,10 @@ function updatePagination() {
 }
 
 // Change page
-async function changePage(page) {
+function changePage(page) {
     if (page < 1 || page > state.totalPages) return;
-    await fetchData(page);
+    state.currentPage = page;
+    applyFilters();
     updateTable();
 }
 
@@ -635,11 +736,20 @@ function formatColumnName(column) {
 function formatValue(value) {
     if (value === null || value === undefined) return '';
     
+    // Return code values as is without formatting
+    if (typeof value === 'string' && value.includes('code')) {
+        return value;
+    }
+
+    // Handle monetary values
     if (typeof value === 'number' || (typeof value === 'string' && !isNaN(value))) {
         const num = parseFloat(value);
-        if (String(value).includes('.') || 
-            String(value).toLowerCase().includes('charge') || 
-            String(value).toLowerCase().includes('price')) {
+        const columnName = Object.entries(state.currentData[0] || {}).find(([_, v]) => v === value)?.[0] || '';
+        
+        // Format monetary values
+        if (columnName.toLowerCase().includes('charge') || 
+            columnName.toLowerCase().includes('price') || 
+            String(value).includes('.')) {
             return new Intl.NumberFormat('en-US', { 
                 style: 'currency', 
                 currency: 'USD',
@@ -647,11 +757,346 @@ function formatValue(value) {
                 maximumFractionDigits: 2
             }).format(num);
         }
-        return new Intl.NumberFormat('en-US', {
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 2
-        }).format(num);
+        
+        // Format other numeric values
+        if (!columnName.toLowerCase().includes('code')) {
+            return new Intl.NumberFormat('en-US', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 2
+            }).format(num);
+        }
     }
     
     return String(value);
-} 
+}
+
+// Update selected text in dropdown button
+function updateSelectedText(column) {
+    if (column === 'code') return;
+
+    const dropdown = document.getElementById(`${column}Dropdown`);
+    if (!dropdown) return;
+
+    const selectedValues = state.filters[column];
+    const selectedText = dropdown.querySelector('.selected-text');
+    
+    if (!selectedValues || selectedValues.length === 0) {
+        selectedText.textContent = `Select ${formatColumnName(column)}`;
+    } else if (selectedValues.length === 1) {
+        selectedText.textContent = selectedValues[0];
+    } else {
+        selectedText.textContent = `${selectedValues.length} selected`;
+    }
+}
+
+// Update CSS styles for dropdowns
+const style = document.createElement('style');
+style.textContent = `
+    .filter-container {
+        position: relative;
+        z-index: 1500;
+        background: #fff;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-bottom: 1px solid #dee2e6;
+        width: 100%;
+    }
+
+    .table-container {
+        position: relative;
+        z-index: 1;
+    }
+
+    .dropdown-check-list {
+        position: relative;
+    }
+
+    .dropdown-menu {
+        width: 100%;
+        position: absolute !important;
+        z-index: 2000 !important;
+        max-height: 300px;
+        overflow-y: auto;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        border: 1px solid rgba(0,0,0,0.15);
+        background-color: #fff;
+        margin-top: 2px !important;
+        padding: 8px;
+    }
+
+    /* Ensure dropdowns appear within the filter container */
+    .filter-container .dropdown-menu {
+        position: absolute !important;
+        top: 100% !important;
+        left: 0 !important;
+        transform: none !important;
+        max-width: 100% !important;
+    }
+
+    .table-responsive {
+        position: relative;
+        z-index: 1;
+        margin-top: 20px;
+    }
+
+    /* Hide table when dropdowns are open */
+    .dropdown-open .table-responsive {
+        visibility: visible;
+    }
+
+    .select2-container {
+        z-index: 2000 !important;
+    }
+
+    .select2-dropdown {
+        z-index: 2001 !important;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        border: 1px solid rgba(0,0,0,0.15);
+    }
+
+    /* Rest of the existing styles */
+    .options-container {
+        max-height: 200px;
+        overflow-y: auto;
+        margin-top: 8px;
+    }
+
+    .form-check {
+        padding: 8px;
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border-radius: 4px;
+    }
+
+    .form-check:hover {
+        background-color: rgba(0,0,0,0.05);
+    }
+
+    /* Mobile specific styles */
+    @media (max-width: 768px) {
+        .filter-container {
+            position: sticky;
+            top: 0;
+            background: #fff;
+            padding: 10px;
+            z-index: 1500;
+        }
+
+        .dropdown-menu {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            width: 90% !important;
+            max-width: 400px;
+            max-height: 80vh;
+        }
+    }
+`;
+document.head.appendChild(style);
+
+// Add new function for client-side filtering
+function applyFilters() {
+    console.time('applyFilters');
+    let filtered = [...state.allData];
+    
+    // Apply each filter
+    Object.entries(state.filters).forEach(([column, value]) => {
+        if (!value || (Array.isArray(value) && value.length === 0)) return;
+        
+        if (column === 'code') {
+            filtered = filtered.filter(item => item.code === value);
+        } else if (Array.isArray(value)) {
+            filtered = filtered.filter(item => value.includes(String(item[column])));
+        }
+    });
+    
+    // Update filtered data and pagination
+    state.filteredData = filtered;
+    state.totalPages = Math.ceil(filtered.length / state.perPage);
+    state.currentPage = Math.min(state.currentPage, state.totalPages);
+    
+    // Get current page data
+    const start = (state.currentPage - 1) * state.perPage;
+    const end = start + state.perPage;
+    state.currentData = filtered.slice(start, end);
+    
+    console.timeEnd('applyFilters');
+}
+
+// Update Select2 specific styles
+const select2Styles = document.createElement('style');
+select2Styles.textContent = `
+    .select2-container--bootstrap-5 .select2-selection {
+        min-height: 38px;
+        border: 1px solid #ced4da;
+    }
+    
+    .select2-container--bootstrap-5 .select2-selection--multiple {
+        padding: 2px 8px;
+    }
+    
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice {
+        background-color: #673ab7;
+        color: #ffffff;
+        border: none;
+        padding: 2px 8px;
+        margin: 2px 4px;
+        border-radius: 4px;
+        font-weight: 400;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove {
+        color: #ffffff !important;
+        font-size: 18px;
+        order: 1;
+        padding: 0 4px;
+        border: none;
+        background: transparent;
+        opacity: 1;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+    }
+
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove:hover {
+        background-color: transparent;
+        color: #e0e0e0 !important;
+        opacity: 0.9;
+    }
+
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__display {
+        color: #ffffff;
+        padding: 0;
+        order: 0;
+        margin: 0;
+    }
+
+    /* Override any default Select2 remove button styles */
+    .select2-selection__choice__remove span,
+    .select2-selection__choice__remove::before,
+    .select2-selection__choice__remove::after {
+        color: #ffffff !important;
+        font-size: 18px !important;
+        font-weight: normal !important;
+    }
+
+    /* Ensure hover states maintain visibility */
+    .select2-selection__choice__remove:hover span,
+    .select2-selection__choice__remove:hover::before,
+    .select2-selection__choice__remove:hover::after {
+        color: #e0e0e0 !important;
+    }
+
+    .select2-container--bootstrap-5 .select2-search__field {
+        margin-top: 0;
+        min-height: 30px;
+    }
+    
+    .select2-container--bootstrap-5 .select2-dropdown {
+        border-color: #ced4da;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
+        background-color: #673ab7;
+        color: #ffffff;
+    }
+    
+    .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
+        background-color: #e9ecef;
+    }
+
+    .select2-container--bootstrap-5.select2-container--focus .select2-selection {
+        border-color: #673ab7;
+        box-shadow: 0 0 0 0.2rem rgba(103, 58, 183, 0.25);
+    }
+
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__rendered {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .select2-container--bootstrap-5 .select2-selection--multiple .select2-search__field {
+        margin-left: 4px;
+    }
+`;
+document.head.appendChild(select2Styles);
+
+// Update table styles for column separators
+const tableStyles = document.createElement('style');
+tableStyles.textContent = `
+    .table {
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid #000;
+    }
+    
+    .table th,
+    .table td {
+        border-right: 1px solid #000;
+        border-bottom: 1px solid #000;
+        padding: 8px;
+    }
+    
+    .table th:last-child,
+    .table td:last-child {
+        border-right: 1px solid #000;
+    }
+    
+    .table thead th {
+        border-bottom: 2px solid #000;
+        background-color: #673ab7;
+        color: white;
+        font-weight: 500;
+        vertical-align: middle;
+    }
+
+    .table thead {
+        border-bottom: 2px solid #000;
+    }
+    
+    .table tbody tr:last-child td {
+        border-bottom: 1px solid #000;
+    }
+    
+    .table tbody tr:nth-of-type(odd) {
+        background-color: rgba(0, 0, 0, 0.05);
+    }
+    
+    .table tbody tr:hover {
+        background-color: rgba(0, 0, 0, 0.075);
+    }
+
+    .btn-sort {
+        background: transparent;
+        border: none;
+        color: white;
+        padding: 0;
+        margin-left: 8px;
+    }
+
+    .btn-sort:hover {
+        color: rgba(255, 255, 255, 0.8);
+    }
+
+    .sort-asc svg path:first-child,
+    .sort-desc svg path:last-child {
+        fill: white;
+    }
+
+    .table-responsive {
+        border: 1px solid #000;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+`;
+document.head.appendChild(tableStyles); 
