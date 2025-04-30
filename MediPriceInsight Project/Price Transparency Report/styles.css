@@ -9,11 +9,16 @@
 
 body {
     background-color: var(--light-bg);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    overflow-y: scroll;
 }
 
 .container {
     max-width: 95%;
     margin: 0 auto;
+    padding: 2rem 0;
 }
 
 .card {
@@ -24,10 +29,36 @@ body {
 }
 
 .table-responsive {
-    max-height: calc(100vh - 300px);
-    overflow-y: auto;
+    max-height: 840px;
+    overflow-y: scroll !important;
+    overflow-x: scroll !important;
     scrollbar-width: thin;
     scrollbar-color: var(--primary-color) var(--light-bg);
+    display: block;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+    border: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+    background-color: var(--white);
+}
+
+/* Ensure scrollbars are visible in WebKit browsers */
+.table-responsive::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    display: block !important;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+    background: var(--light-bg);
+    border-radius: 4px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb {
+    background-color: var(--primary-color);
+    border-radius: 4px;
+    border: 2px solid var(--light-bg);
 }
 
 .table {
@@ -37,6 +68,7 @@ body {
     margin-bottom: 0;
     border-collapse: separate;
     border-spacing: 0;
+    position: relative;
 }
 
 .table th {
@@ -125,17 +157,7 @@ body {
 }
 
 .pagination-container {
-    background-color: var(--white);
-    padding: 1rem;
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    margin-top: 1rem;
-}
-
-.pagination-container .btn {
-    min-width: 40px;
-    padding: 0.375rem;
-    margin: 0 0.125rem;
+    display: none !important;
 }
 
 .btn-primary {
