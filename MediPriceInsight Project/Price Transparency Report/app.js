@@ -852,7 +852,7 @@ function updateTable() {
         uniqueCounts[key] = uniqueValues.size;
     });
 
-    // Setup table headers with sort buttons
+    // Setup table headers
     const headerRow = document.createElement('tr');
     Object.entries(columnMap).forEach(([key, headerText]) => {
         const th = document.createElement('th');
@@ -881,9 +881,8 @@ function updateTable() {
             sortData();
             updateTable();
         });
-        
-        headerContent.appendChild(textSpan);
         headerContent.appendChild(sortButton);
+        headerContent.insertBefore(textSpan, headerContent.firstChild);
         th.appendChild(headerContent);
         headerRow.appendChild(th);
     });
@@ -891,23 +890,21 @@ function updateTable() {
     tableHeader.innerHTML = '';
     tableHeader.appendChild(headerRow);
 
-    // Add summary row right after header
+    // Add summary row
     const summaryRow = document.createElement('tr');
     summaryRow.className = 'summary-row';
     Object.keys(columnMap).forEach(key => {
         const td = document.createElement('td');
         td.innerHTML = `
-            <strong>${uniqueCounts[key].toLocaleString()}</strong>
+            <strong>${uniqueCounts[key]?.toLocaleString() || '0'}</strong>
             <span class="summary-label">unique</span>
         `;
         summaryRow.appendChild(td);
     });
     tableHeader.appendChild(summaryRow);
 
-    // Use DocumentFragment for better performance
-    const fragment = document.createDocumentFragment();
-    
     // Add data rows
+    const fragment = document.createDocumentFragment();
     state.currentData.forEach(item => {
         const row = document.createElement('tr');
         Object.keys(columnMap).forEach(key => {
@@ -924,6 +921,7 @@ function updateTable() {
 
     reportTableBody.innerHTML = '';
     reportTableBody.appendChild(fragment);
+    
     console.timeEnd('updateTable');
 }
 

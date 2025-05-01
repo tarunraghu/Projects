@@ -344,4 +344,21 @@ body {
 
 .select-all {
     margin-right: 0.5rem;
+}
+
+.distance-header {
+    min-width: 100px;
+}
+
+.distance-cell {
+    text-align: right;
+    font-family: monospace;
+    white-space: nowrap;
+    min-width: 100px;
+}
+
+.distance-cell:empty::after {
+    content: 'Calculating...';
+    color: #666;
+    font-style: italic;
 } 
