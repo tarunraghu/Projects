@@ -208,47 +208,92 @@ def get_report():
             region = request.args.get('region')
             city = request.args.get('city')
             code = request.args.get('code')
-            fields = request.args.get('fields')
+            payer_name = request.args.get('payer_name')
+            plan_name = request.args.get('plan_name')
             
-            # Build WHERE clause
-            conditions = []
-            params = []
+            # Validate required parameters
+            if not region or not city or not code:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Region, city, and code are required parameters',
+                    'data': []
+                }), 400
             
-            if region:
-                conditions.append("region = %s")
-                params.append(region)
-            
-            if city:
-                conditions.append("city = %s")
-                params.append(city)
-            
-            if code:
-                conditions.append("code = %s")
-                params.append(code)
-                
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            # Build base WHERE clause with required parameters
+            base_conditions = [
+                "region = %s",
+                "city = %s",
+                "code = %s"
+            ]
+            base_params = [region, city, code]
+
+            # Get unique payer names and plan names first
+            unique_payers_query = f"""
+                SELECT DISTINCT payer_name
+                FROM public.hospital_dataset
+                WHERE {" AND ".join(base_conditions)}
+                ORDER BY payer_name
+            """
+            cur.execute(unique_payers_query, base_params)
+            unique_payers = [row['payer_name'] for row in cur.fetchall()]
+
+            unique_plans_query = f"""
+                SELECT DISTINCT plan_name
+                FROM public.hospital_dataset
+                WHERE {" AND ".join(base_conditions)}
+                ORDER BY plan_name
+            """
+            cur.execute(unique_plans_query, base_params)
+            unique_plans = [row['plan_name'] for row in cur.fetchall()]
+
+            # Build final WHERE clause with all filters
+            conditions = base_conditions.copy()
+            params = base_params.copy()
+
+            # Add payer name filter if provided
+            if payer_name:
+                conditions.append("payer_name = %s")
+                params.append(payer_name)
+
+            # Add plan name filter if provided
+            if plan_name:
+                conditions.append("plan_name = %s")
+                params.append(plan_name)
+
+            where_clause = " AND ".join(conditions)
 
             # Get total count
             count_query = f"""
-                SELECT COUNT(*)
+                SELECT COUNT(*) as count
                 FROM public.hospital_dataset
                 WHERE {where_clause}
             """
             cur.execute(count_query, params)
             total_count = cur.fetchone()['count']
 
-            # Get data
+            # Get data with all relevant fields
             if total_count > 0:
                 data_query = f"""
                     SELECT 
-                        id, hospital_name, code, description,
-                        hospital_address, city, region,
-                        payer_name, plan_name,
-                        standard_charge_min, standard_charge_max,
-                        standard_charge_gross, standard_charge_negotiated_dollar
+                        id,
+                        hospital_name,
+                        hospital_address,
+                        code,
+                        description,
+                        city,
+                        region,
+                        payer_name,
+                        plan_name,
+                        standard_charge_min,
+                        standard_charge_max,
+                        standard_charge_gross,
+                        standard_charge_negotiated_dollar
                     FROM public.hospital_dataset
                     WHERE {where_clause}
-                    ORDER BY hospital_name, payer_name, plan_name
+                    ORDER BY 
+                        hospital_name,
+                        payer_name,
+                        plan_name
                 """
                 cur.execute(data_query, params)
                 results = cur.fetchall()
@@ -261,7 +306,9 @@ def get_report():
             return jsonify({
                 'status': 'success',
                 'data': results,
-                'total': total_count
+                'total': total_count,
+                'unique_payers': unique_payers,
+                'unique_plans': unique_plans
             })
 
     except Exception as e:
@@ -278,37 +325,60 @@ def get_report():
 @app.route('/api/report/codes')
 @cache.cached(timeout=3600)  # Cache for 1 hour since codes rarely change
 def get_codes():
-    try:
-        start_time = time.time()
-        conn = get_db_connection()
-        cur = conn.cursor()
+    start_time = time.time()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
 
-        # Efficient query to get distinct codes and descriptions
-        query = """
-        SELECT DISTINCT code, description 
-        FROM public.hospital_dataset 
-        WHERE code IS NOT NULL 
-        ORDER BY code;
-        """
-        
-        cur.execute(query)
-        results = cur.fetchall()
-        
-        # Convert results to list of dicts
-        data = [dict(row) for row in results]
-        
-        cur.close()
-        conn.close()
-        
-        execution_time = time.time() - start_time
-        logger.info(f"Codes fetched in {execution_time:.2f}s - {len(data)} unique codes")
-        
-        return jsonify({
-            'status': 'success',
-            'data': data,
-            'count': len(data)
-        })
-        
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get filter parameters
+            region = request.args.get('region')
+            city = request.args.get('city')
+            code = request.args.get('code')
+            
+            # Validate required parameters
+            if not region or not city:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Region and city are required parameters',
+                    'data': []
+                }), 400
+            
+            # Build WHERE clause with region and city
+            conditions = [
+                "region = %s",
+                "city = %s"
+            ]
+            params = [region, city]
+
+            # If specific code is requested, add it to the filter
+            if code:
+                conditions.append("code = %s")
+                params.append(code)
+
+            where_clause = " AND ".join(conditions)
+
+            # Get distinct codes and descriptions for the selected region and city
+            query = f"""
+                SELECT DISTINCT code, description 
+                FROM public.hospital_dataset 
+                WHERE {where_clause}
+                ORDER BY code
+            """
+            
+            cur.execute(query, params)
+            results = cur.fetchall()
+            
+            duration = time.time() - start_time
+            logger.info(f"Codes fetched in {duration:.2f}s - {len(results)} unique codes for {region}, {city}")
+            
+            return jsonify({
+                'status': 'success',
+                'data': results,
+                'count': len(results)
+            })
+
     except Exception as e:
         logger.error(f"Error fetching codes: {str(e)}")
         return jsonify({
@@ -316,6 +386,9 @@ def get_codes():
             'message': 'Failed to fetch codes',
             'error': str(e)
         }), 500
+    finally:
+        if conn:
+            conn.close()
 
 def query_llm(prompt, model="llama2"):
     try:
