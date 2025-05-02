@@ -330,7 +330,7 @@ async function setupFilters() {
                                     placeholder: 'Select Code...',
                                     allowClear: true
                                 });
-                            } else {
+                } else {
                                 // Just trigger change to update the UI
                                 $(codeFilter).trigger('change');
                             }
