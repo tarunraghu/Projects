@@ -1,5 +1,5 @@
 // Configuration
-const API_ENDPOINT = '/api/report';
+const API_ENDPOINT = '/api';
 const FILTERS_ENDPOINT = '/api/filters';
 
 // DOM Elements
@@ -33,7 +33,7 @@ const EXCLUDED_FILTERS = [
     'standard_charge_negotiated_dollar'
 ];
 
-const FILTER_ORDER = ['code', 'region', 'city', 'payer_name', 'plan_name'];
+const FILTER_ORDER = ['region', 'city', 'code', 'payer_name', 'plan_name'];
 const MANDATORY_FILTERS = ['code'];
 const DEBOUNCE_DELAY = 300;
 
@@ -130,68 +130,244 @@ async function setupFilters() {
     try {
         console.log('Starting filter setup...');
         
-        // First fetch distinct codes and descriptions
-        console.log('Fetching codes and descriptions...');
-        const codesResponse = await fetch(`${API_ENDPOINT}/codes`);
-        if (!codesResponse.ok) throw new Error('Failed to fetch codes');
-        const codesData = await codesResponse.json();
+        // First fetch distinct regions
+        console.log('Fetching regions...');
+        const regionsResponse = await fetch(`${API_ENDPOINT}/regions`);
+        if (!regionsResponse.ok) throw new Error('Failed to fetch regions');
+        const regionsData = await regionsResponse.json();
         
-        console.log('Received codes data:', {
-            count: codesData.data?.length || 0
+        console.log('Raw regions response:', regionsData);
+        console.log('Received regions data:', {
+            count: regionsData?.length || 0,
+            data: regionsData
         });
 
-        // Create filter values object with codes
+        // Create filter values object
         const filterValues = {
-            code: [],
             region: [],
             city: [],
+            code: [],
             payer_name: [],
             plan_name: []
         };
 
-        // Create uniqueCodes map with descriptions
-        const uniqueCodes = new Map();
-        if (codesData.data) {
-            codesData.data.forEach(item => {
-                if (item.code) {
-                    uniqueCodes.set(item.code, {
-                        code: item.code,
-                        description: item.description || ''
-                    });
-                    filterValues.code.push(item.code);
+        // Initialize with regions
+        if (regionsData && regionsData.length > 0) {
+            filterValues.region = regionsData.map(item => String(item)).filter(Boolean).sort();
+            console.log('Processed regions:', filterValues.region);
+        }
+
+        // Setup UI with regions
+        setupDynamicFilters(Object.keys(filterValues));
+        populateFilters(filterValues, new Map());
+
+        // Add event listener for region selection
+        const regionFilter = document.getElementById('regionFilter');
+        if (regionFilter) {
+            $(regionFilter).select2({
+                theme: 'bootstrap-5',
+                width: '100%',
+                placeholder: 'Select Region...',
+                allowClear: true,
+                data: filterValues.region.map(region => ({
+                    id: region,
+                    text: region
+                }))
+            });
+
+            $(regionFilter).on('select2:select', async function(e) {
+                const selectedRegion = e.params.data.id;
+                if (selectedRegion) {
+                    try {
+                        showLoading();
+                        // Fetch cities for the selected region using the new endpoint
+                        const response = await fetch(`${API_ENDPOINT}/cities?region=${encodeURIComponent(selectedRegion)}`);
+                        if (!response.ok) {
+                            console.error('Failed to fetch cities:', response.status, response.statusText);
+                            showError('Failed to fetch cities');
+                            return;
+                        }
+                        
+                        const cities = await response.json();
+                        if (!cities || !Array.isArray(cities)) {
+                            console.error('Invalid cities data received:', cities);
+                            showError('Invalid data received from server');
+                            return;
+                        }
+                        
+                        if (cities.length === 0) {
+                            console.warn('No cities found for region:', selectedRegion);
+                            showError('No cities found for the selected region');
+                            return;
+                        }
+                        
+                        // Update city filter with the cities
+                        const cityFilter = document.getElementById('cityFilter');
+                        if (cityFilter) {
+                            // Clear existing options
+                            $(cityFilter).empty();
+                            
+                            // Add placeholder option
+                            const placeholderOption = new Option('Select City...', '', true, true);
+                            $(cityFilter).append(placeholderOption);
+                            
+                            // Add city options
+                            cities.forEach(city => {
+                                const option = new Option(city, city);
+                                $(cityFilter).append(option);
+                            });
+                            
+                            // Initialize Select2 if not already initialized
+                            if (!$(cityFilter).hasClass('select2-hidden-accessible')) {
+                                $(cityFilter).select2({
+                                    theme: 'bootstrap-5',
+                                    width: '100%',
+                                    placeholder: 'Select City...',
+                                    allowClear: true
+                                });
+                            } else {
+                                // Just trigger change to update the UI
+                                $(cityFilter).trigger('change');
+                            }
+                            
+                            // Reset dependent filters
+                            resetDependentFilters(['code', 'payer_name', 'plan_name']);
+                            
+                            // Clear table until city is selected
+                            reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a city to view data</td></tr>';
+                        }
+                    } catch (error) {
+                        console.error('Error in region selection:', error);
+                        showError('Failed to load cities for the selected region');
+                    } finally {
+                        hideLoading();
+                    }
                 }
+            });
+
+            // Handle clear event
+            $(regionFilter).on('select2:clear', function() {
+                // Reset all data and filters
+                state.allData = [];
+                state.filteredData = [];
+                state.currentData = [];
+                
+                // Reset other filter values
+                ['city', 'code', 'payer_name', 'plan_name'].forEach(key => {
+                    filterValues[key] = [];
+                    const filter = $(`#${key}Filter`);
+                    if (filter.length) {
+                        filter.val(null).trigger('change');
+                    }
+                });
+                
+                // Update table
+                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a region to view data</td></tr>';
             });
         }
 
-        // Sort codes alphanumerically
-        filterValues.code.sort((a, b) => {
-            // Extract numeric and non-numeric parts
-            const aMatch = a.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
-            const bMatch = b.match(/^(\D+)?(\d+)?(\D+)?(\d+)?/);
-            
-            if (!aMatch || !bMatch) return a.localeCompare(b);
-            
-            // Compare parts
-            for (let i = 1; i < 5; i++) {
-                const aPart = aMatch[i] || '';
-                const bPart = bMatch[i] || '';
-                
-                if (i % 2 === 0) {
-                    // Compare numeric parts
-                    const aNum = parseInt(aPart || '0', 10);
-                    const bNum = parseInt(bPart || '0', 10);
-                    if (aNum !== bNum) return aNum - bNum;
-                } else {
-                    // Compare non-numeric parts
-                    if (aPart !== bPart) return aPart.localeCompare(bPart);
+        // Add event listener for city selection
+        const cityFilter = document.getElementById('cityFilter');
+        if (cityFilter) {
+            $(cityFilter).on('select2:select', async function(e) {
+                const selectedCity = e.params.data.id;
+                if (selectedCity) {
+                    try {
+                        showLoading();
+                        // Fetch codes for the selected city
+                        const response = await fetch(`${API_ENDPOINT}/report/codes?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(selectedCity)}`);
+                        if (!response.ok) {
+                            console.error('Failed to fetch codes:', response.status, response.statusText);
+                            showError('Failed to fetch codes');
+                            return;
+                        }
+                        
+                        const data = await response.json();
+                        if (!data || !data.data) {
+                            console.error('Invalid data received:', data);
+                            showError('Invalid data received from server');
+                            return;
+                        }
+                        
+                        // Update state with the fetched data
+                        state.allData = data.data || [];
+                        
+                        // Extract unique codes with descriptions
+                        const uniqueCodes = [...new Set(state.allData.map(item => ({
+                            code: item.code,
+                            description: item.description || ''
+                        })))].filter(item => item.code).sort((a, b) => a.code.localeCompare(b.code));
+                        
+                        // Update code filter with codes and descriptions
+                        const codeFilter = document.getElementById('codeFilter');
+                        if (codeFilter) {
+                            // Clear existing options
+                            $(codeFilter).empty();
+                            
+                            // Add placeholder option
+                            const placeholderOption = new Option('Select Code...', '', true, true);
+                            $(codeFilter).append(placeholderOption);
+                            
+                            // Add code options with descriptions
+                            uniqueCodes.forEach(item => {
+                                const optionText = item.description ? 
+                                    `${item.code} - ${item.description}` : 
+                                    item.code;
+                                const option = new Option(optionText, item.code);
+                                $(codeFilter).append(option);
+                            });
+                            
+                            // Initialize Select2 if not already initialized
+                            if (!$(codeFilter).hasClass('select2-hidden-accessible')) {
+                                $(codeFilter).select2({
+                                    theme: 'bootstrap-5',
+                                    width: '100%',
+                                    placeholder: 'Select Code...',
+                                    allowClear: true
+                                });
+                            } else {
+                                // Just trigger change to update the UI
+                                $(codeFilter).trigger('change');
+                            }
+                            
+                            // Focus on the code filter
+                            $(codeFilter).select2('open');
+                        }
+                        
+                        // Reset dependent filters
+                        resetDependentFilters(['payer_name', 'plan_name']);
+                        
+                        // Clear table until code is selected
+                        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
+                    } catch (error) {
+                        console.error('Error fetching codes:', error);
+                        showError('Failed to load codes for the selected city');
+                    } finally {
+                        hideLoading();
+                    }
                 }
-            }
-            return 0;
-        });
+            });
 
-        // Setup UI with codes and descriptions
-        setupDynamicFilters(Object.keys(filterValues));
-        populateFilters(filterValues, uniqueCodes);
+            // Handle clear event
+            $(cityFilter).on('select2:clear', function() {
+                // Reset data and dependent filters
+                state.allData = [];
+                state.filteredData = [];
+                state.currentData = [];
+                
+                // Reset dependent filter values
+                ['code', 'payer_name', 'plan_name'].forEach(key => {
+                    filterValues[key] = [];
+                    const filter = $(`#${key}Filter`);
+                    if (filter.length) {
+                        filter.val(null).trigger('change');
+                    }
+                });
+                
+                // Update table
+                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a city to view data</td></tr>';
+            });
+        }
 
         // Add event listener for code selection
         const codeFilter = document.getElementById('codeFilter');
@@ -199,39 +375,38 @@ async function setupFilters() {
             $(codeFilter).on('select2:select', async function(e) {
                 const selectedCode = e.params.data.id;
                 if (selectedCode) {
-                    showLoading();
                     try {
-                        // Fetch full data for the selected code
-                        const response = await fetch(`${API_ENDPOINT}?code=${selectedCode}`);
-                        if (!response.ok) throw new Error('Failed to fetch data');
+                        showLoading();
+                        // Fetch data for the selected code
+                        const response = await fetch(`${API_ENDPOINT}/report?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(state.filters.city)}&code=${encodeURIComponent(selectedCode)}`);
+                        if (!response.ok) {
+                            console.error('Failed to fetch data:', response.status, response.statusText);
+                            showError('Failed to fetch data');
+                            return;
+                        }
+                        
                         const data = await response.json();
+                        if (!data || !data.data) {
+                            console.error('Invalid data received:', data);
+                            showError('Invalid data received from server');
+                            return;
+                        }
                         
                         // Update state with the fetched data
                         state.allData = data.data || [];
+                        state.filteredData = state.allData;
+                        state.currentData = state.allData;
                         
-                        // Extract unique values for other filters
-                        const uniqueValues = {
-                            region: new Set(),
-                            city: new Set(),
-                            payer_name: new Set(),
-                            plan_name: new Set()
-                        };
+                        // Extract unique payer names
+                        const uniquePayerNames = [...new Set(state.allData.map(item => String(item.payer_name)))].filter(Boolean).sort();
                         
-                        state.allData.forEach(item => {
-                            if (item.region) uniqueValues.region.add(String(item.region));
-                            if (item.city) uniqueValues.city.add(String(item.city));
-                            if (item.payer_name) uniqueValues.payer_name.add(String(item.payer_name));
-                            if (item.plan_name) uniqueValues.plan_name.add(String(item.plan_name));
-                        });
+                        // Update payer name filter
+                        updateFilterOptions('payer_name', uniquePayerNames);
                         
-                        // Update filter values
-                        Object.keys(uniqueValues).forEach(key => {
-                            filterValues[key] = Array.from(uniqueValues[key]).sort();
-                        });
+                        // Reset plan name filter
+                        resetDependentFilters(['plan_name']);
                         
-                        // Update other dropdowns
-                        updateDependentFilters('code');
-                        applyFilters();
+                        // Update table with the data
                         updateTable();
                     } catch (error) {
                         console.error('Error fetching data:', error);
@@ -241,32 +416,12 @@ async function setupFilters() {
                     }
                 }
             });
-
-            // Handle clear event
-            $(codeFilter).on('select2:clear', function() {
-                // Reset all data and filters
-                state.allData = [];
-                state.filteredData = [];
-                state.currentData = [];
-                
-                // Reset other filter values
-                ['region', 'city', 'payer_name', 'plan_name'].forEach(key => {
-                    filterValues[key] = [];
-                    const filter = $(`#${key}Filter`);
-                    if (filter.length) {
-                        filter.val(null).trigger('change');
-                    }
-                });
-                
-                // Update table
-                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
-            });
         }
 
     } catch (error) {
         console.error('Error in setupFilters:', error);
         hideLoading();
-        showError('Failed to load codes and descriptions');
+        showError('Failed to load regions');
         throw error;
     }
 }
@@ -358,7 +513,7 @@ async function fetchData(page = 1, isInitialLoad = false) {
 
 // Setup dynamic filters
 function setupDynamicFilters(columns) {
-    console.log('Setting up dynamic filters...');
+    console.log('Setting up dynamic filters for columns:', columns);
     filterContainer.innerHTML = '';
 
     // Create filters in specified order
@@ -391,38 +546,12 @@ function createFilterElement(column, isMandatory) {
     filterCol.appendChild(label);
     filterCol.appendChild(select);
 
-    // Initialize Select2 with appropriate configuration
-    $(select).select2({
-        theme: 'bootstrap-5',
-        width: '100%',
-        placeholder: column === 'code' ? 'Search by code...' : `Select ${formatColumnName(column)}...`,
-        allowClear: true,
-        multiple: column !== 'code',
-        closeOnSelect: column === 'code',
-        selectionCssClass: 'select2--small',
-        dropdownCssClass: 'select2--small',
-        templateResult: function(data) {
-            if (!data.id) return data.text;
-            return $('<span>').text(data.text);
-        }
-    });
-
-    // Add event listeners for Select2
-    if (column !== 'code') {
-        $(select).on('select2:select select2:unselect', function(e) {
-            const values = $(this).val() || [];
-            state.filters[column] = values;
-            updateFilters(column);
-        });
-    }
-
     filterContainer.appendChild(filterCol);
-    state.filters[column] = column === 'code' ? '' : [];
 }
 
 // Populate filters with values
 function populateFilters(filterValues, uniqueCodes) {
-    console.log('Starting filter population...');
+    console.log('Populating filters with values:', filterValues);
     state.filterOptions = filterValues;
     
     Object.entries(filterValues).forEach(([column, values]) => {
@@ -432,52 +561,24 @@ function populateFilters(filterValues, uniqueCodes) {
             return;
         }
 
-        if (column === 'code') {
-            console.log(`Populating ${values.length} codes with descriptions...`);
+        if (column === 'region') {
+            console.log(`Populating ${values.length} regions...`);
             
-            // Format options to include both code and description
-            const options = values.map(code => {
-                const codeData = uniqueCodes.get(code);
-                const description = codeData?.description || '';
-                return {
-                    id: code,
-                    text: description ? `${code} - ${description}` : code,
-                    code: code,
-                    description: description
-                };
-            });
+            // Format options for regions
+            const options = values.map(region => ({
+                id: region,
+                text: region
+            }));
 
-            console.log('Sample formatted options:', options.slice(0, 5));
+            console.log('Region options:', options);
             
             $(filter).empty().append('<option></option>');
             $(filter).select2({
                 theme: 'bootstrap-5',
                 width: '100%',
-                placeholder: 'Search by code or description...',
+                placeholder: 'Select Region...',
                 allowClear: true,
-                data: options,
-                matcher: function(params, data) {
-                    // If there are no search terms, return all of the data
-                    if ($.trim(params.term) === '') {
-                        return data;
-                    }
-
-                    // Search in both code and description, case insensitive
-                    const searchTerm = params.term.toLowerCase();
-                    const code = data.code.toLowerCase();
-                    const description = data.description.toLowerCase();
-                    const text = data.text.toLowerCase();
-
-                    // Match if the search term appears in code, description, or full text
-                    if (code.includes(searchTerm) || 
-                        description.includes(searchTerm) || 
-                        text.includes(searchTerm)) {
-                        return data;
-                    }
-
-                    // Return null if no match
-                    return null;
-                }
+                data: options
             });
         } else {
             // For other filters, initialize with empty state
@@ -652,96 +753,59 @@ async function updateDependentFilters(changedFilter) {
     if (filterIndex === -1) return;
 
     try {
-        // Get current filtered data based on code selection
+        // Get current filtered data based on region selection
         let filteredData = [...state.allData];
         
-        // Filter data based on selected code first
-        const selectedCode = state.filters.code;
-        if (selectedCode) {
-            filteredData = filteredData.filter(item => item.code === selectedCode);
+        // Filter data based on selected region first
+        const selectedRegion = state.filters.region;
+        if (selectedRegion) {
+            filteredData = filteredData.filter(item => item.region === selectedRegion);
         }
         
-        // Special handling for region-city dependency
-        if (changedFilter === 'region') {
-            const selectedRegions = state.filters.region || [];
-            if (selectedRegions.length > 0) {
-                // Filter cities based on selected regions
-                filteredData = filteredData.filter(item => selectedRegions.includes(String(item.region)));
-                const uniqueCities = [...new Set(filteredData.map(item => String(item.city)))].filter(Boolean);
+        // Special handling for city selection
+        if (changedFilter === 'city') {
+            const selectedCities = state.filters.city || [];
+            if (selectedCities.length > 0) {
+                // Filter data based on selected cities
+                filteredData = filteredData.filter(item => selectedCities.includes(String(item.city)));
                 
-                // Get counts for cities
-                const cityCounts = uniqueCities.map(city => ({
-                    id: city,
-                    count: filteredData.filter(item => String(item.city) === city).length
+                // Get unique codes for the selected cities
+                const uniqueCodes = [...new Set(filteredData.map(item => item.code))].filter(Boolean);
+                
+                // Update code filter with counts
+                const codeCounts = uniqueCodes.map(code => ({
+                    id: code,
+                    count: filteredData.filter(item => item.code === code).length
                 }));
                 
-                // Update city filter with counts
-                const cityOptions = cityCounts
-                    .map(({ id, count }) => ({
-                        id,
-                        text: `${id} (${count})`,
-                        count: count
-                    }))
-                    .sort((a, b) => a.id.localeCompare(b.id));
-
-                const cityFilter = $('#cityFilter');
-                const currentSelectedCities = cityFilter.val() || [];
-                const validSelectedCities = currentSelectedCities.filter(city => 
-                    uniqueCities.includes(city)
-                );
-
-                cityFilter.empty();
-                cityFilter.select2({
-                    theme: 'bootstrap-5',
-                    width: '100%',
-                    placeholder: 'Select City...',
-                    allowClear: true,
-                    multiple: true,
-                    data: cityOptions,
-                    templateResult: function(data) {
-                        if (!data.id) return data.text;
-                        return $('<span>').html(data.text);
-                    },
-                    templateSelection: function(data) {
-                        if (!data.id) return data.text;
-                        const option = cityOptions.find(opt => opt.id === data.id);
-                        return option ? `${option.id} (${option.count})` : data.id;
-                    }
-                });
-
-                if (validSelectedCities.length > 0) {
-                    cityFilter.val(validSelectedCities).trigger('change');
-                }
-                state.filters.city = validSelectedCities;
-
-                // Update payer_name options with counts
-                const uniquePayerNames = [...new Set(filteredData.map(item => String(item.payer_name)))].filter(Boolean);
-                const payerCounts = uniquePayerNames.map(payer => ({
-                    id: payer,
-                    count: filteredData.filter(item => String(item.payer_name) === payer).length
-                }));
+                // Update code filter options
+                updateFilterOptions('code', codeCounts.map(c => c.id));
                 
-                updateFilterOptions('payer_name', payerCounts.map(p => p.id));
+                // Reset dependent filters
+                resetDependentFilters(['payer_name', 'plan_name']);
             } else {
-                resetDependentFilters(['city', 'payer_name', 'plan_name']);
-                filteredData = state.allData.filter(item => item.code === selectedCode);
+                resetDependentFilters(['code', 'payer_name', 'plan_name']);
             }
         }
 
-        // Update payer_name based on region and city selections
-        if (changedFilter === 'city' || changedFilter === 'region') {
+        // Update payer_name based on region, city, and code selections
+        if (changedFilter === 'code' || changedFilter === 'city' || changedFilter === 'region') {
             let currentData = filteredData;
             
-            // Apply region filter
-            const selectedRegions = state.filters.region || [];
-            if (selectedRegions.length > 0) {
-                currentData = currentData.filter(item => selectedRegions.includes(String(item.region)));
+            // Apply all previous filters
+            const selectedRegion = state.filters.region;
+            if (selectedRegion) {
+                currentData = currentData.filter(item => item.region === selectedRegion);
             }
             
-            // Apply city filter
             const selectedCities = state.filters.city || [];
             if (selectedCities.length > 0) {
                 currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
+            }
+            
+            const selectedCode = state.filters.code;
+            if (selectedCode) {
+                currentData = currentData.filter(item => item.code === selectedCode);
             }
             
             // Update payer_name options
@@ -752,19 +816,24 @@ async function updateDependentFilters(changedFilter) {
             resetDependentFilters(['plan_name']);
         }
 
-        // Update plan_name based on region, city, and payer_name selections
-        if (changedFilter === 'payer_name' || changedFilter === 'city' || changedFilter === 'region') {
+        // Update plan_name based on all previous selections
+        if (changedFilter === 'payer_name' || changedFilter === 'code' || changedFilter === 'city' || changedFilter === 'region') {
             let currentData = filteredData;
             
             // Apply all previous filters
-            const selectedRegions = state.filters.region || [];
-            if (selectedRegions.length > 0) {
-                currentData = currentData.filter(item => selectedRegions.includes(String(item.region)));
+            const selectedRegion = state.filters.region;
+            if (selectedRegion) {
+                currentData = currentData.filter(item => item.region === selectedRegion);
             }
             
             const selectedCities = state.filters.city || [];
             if (selectedCities.length > 0) {
                 currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
+            }
+            
+            const selectedCode = state.filters.code;
+            if (selectedCode) {
+                currentData = currentData.filter(item => item.code === selectedCode);
             }
             
             const selectedPayerNames = state.filters.payer_name || [];
@@ -829,12 +898,12 @@ function updateTable() {
 
     // Define the column mapping
     const columnMap = {
+        'region': 'Region',
+        'city': 'City',
         'code': 'Code',
         'description': 'Description',
         'hospital_name': 'Hospital Name',
         'hospital_address': 'Hospital Address',
-        'region': 'Region',
-        'city': 'City',
         'payer_name': 'Payer Name',
         'plan_name': 'Plan Name',
         'standard_charge_min': 'Standard Charge Min',

@@ -92,9 +92,9 @@ def get_filters():
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Get distinct values for each filter separately
             filter_values = {
-                'code': get_distinct_values(cur, 'code'),
-                'city': get_distinct_values(cur, 'city'),
                 'region': get_distinct_values(cur, 'region'),
+                'city': get_distinct_values(cur, 'city'),
+                'code': get_distinct_values(cur, 'code'),
                 'payer_name': get_distinct_values(cur, 'payer_name'),
                 'plan_name': get_distinct_values(cur, 'plan_name')
             }
@@ -116,6 +116,85 @@ def get_filters():
         if conn:
             conn.close()
 
+@app.route('/api/regions')
+@cache.cached(timeout=300)  # Cache for 5 minutes
+def get_regions():
+    start_time = time.time()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get distinct regions
+            query = """
+                SELECT DISTINCT region
+                FROM public.hospital_dataset
+                WHERE region IS NOT NULL
+                ORDER BY region
+            """
+            cur.execute(query)
+            results = cur.fetchall()
+            
+            duration = time.time() - start_time
+            logger.info(f"Regions fetched in {duration:.2f}s - {len(results)} regions")
+            
+            # Return just the array of regions
+            return jsonify([row['region'] for row in results])
+
+    except Exception as e:
+        logger.error(f"Error fetching regions: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/cities')
+@cache.cached(timeout=300)  # Cache for 5 minutes
+def get_cities():
+    start_time = time.time()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get region parameter
+            region = request.args.get('region')
+            
+            # Build query based on whether region is provided
+            if region:
+                query = """
+                    SELECT DISTINCT city
+                    FROM public.hospital_dataset
+                    WHERE region = %s AND city IS NOT NULL
+                    ORDER BY city
+                """
+                cur.execute(query, (region,))
+            else:
+                query = """
+                    SELECT DISTINCT city
+                    FROM public.hospital_dataset
+                    WHERE city IS NOT NULL
+                    ORDER BY city
+                """
+                cur.execute(query)
+            
+            results = cur.fetchall()
+            
+            duration = time.time() - start_time
+            logger.info(f"Cities fetched in {duration:.2f}s - {len(results)} cities")
+            
+            # Return just the array of cities
+            return jsonify([row['city'] for row in results])
+
+    except Exception as e:
+        logger.error(f"Error fetching cities: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
 @app.route('/api/report')
 def get_report():
     start_time = time.time()
@@ -124,121 +203,66 @@ def get_report():
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
-        # Get filter parameters
-        code = request.args.get('code')
-        fields = request.args.get('fields')
-        
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get filter parameters
+            region = request.args.get('region')
+            city = request.args.get('city')
+            code = request.args.get('code')
+            fields = request.args.get('fields')
+            
             # Build WHERE clause
             conditions = []
             params = []
+            
+            if region:
+                conditions.append("region = %s")
+                params.append(region)
+            
+            if city:
+                conditions.append("city = %s")
+                params.append(city)
             
             if code:
                 conditions.append("code = %s")
                 params.append(code)
                 
-                # If only specific fields are requested
-                if fields:
-                    select_fields = fields
-                else:
-                    select_fields = """
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM public.hospital_dataset
+                WHERE {where_clause}
+            """
+            cur.execute(count_query, params)
+            total_count = cur.fetchone()['count']
+
+            # Get data
+            if total_count > 0:
+                data_query = f"""
+                    SELECT 
                         id, hospital_name, code, description,
                         hospital_address, city, region,
                         payer_name, plan_name,
                         standard_charge_min, standard_charge_max,
                         standard_charge_gross, standard_charge_negotiated_dollar
-                    """
-                
-                where_clause = " AND ".join(conditions) if conditions else "1=1"
-                
-                # Query without pagination when fetching by code
-                data_query = f"""
-                    SELECT {select_fields}
                     FROM public.hospital_dataset
                     WHERE {where_clause}
                     ORDER BY hospital_name, payer_name, plan_name
                 """
-                
                 cur.execute(data_query, params)
                 results = cur.fetchall()
-                total_count = len(results)
-                
-                duration = time.time() - start_time
-                logger.info(f"Data fetched in {duration:.2f}s - {total_count} rows")
-                
-                return jsonify({
-                    'status': 'success',
-                    'data': results,
-                    'total': total_count
-                })
-            
             else:
-                # For non-code queries, keep pagination
-                page = int(request.args.get('page', 1))
-                per_page = int(request.args.get('per_page', 100))
-                offset = (page - 1) * per_page
-                
-                # Add other filters
-                city = request.args.get('city')
-                region = request.args.get('region')
-                payer_name = request.args.get('payer_name')
-                plan_name = request.args.get('plan_name')
-                
-                if city:
-                    conditions.append("city = %s")
-                    params.append(city)
-                if region:
-                    conditions.append("region = %s")
-                    params.append(region)
-                if payer_name:
-                    conditions.append("payer_name = %s")
-                    params.append(payer_name)
-                if plan_name:
-                    conditions.append("plan_name = %s")
-                    params.append(plan_name)
+                results = []
 
-                where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-                # Get total count
-                count_query = f"""
-                    SELECT COUNT(*)
-                    FROM public.hospital_dataset
-                    WHERE {where_clause}
-                """
-                cur.execute(count_query, params)
-                total_count = cur.fetchone()['count']
-
-                # Get paginated data
-                if total_count > 0:
-                    data_query = f"""
-                        SELECT 
-                            id, hospital_name, code, description,
-                            hospital_address, city, region,
-                            payer_name, plan_name,
-                            standard_charge_min, standard_charge_max,
-                            standard_charge_gross, standard_charge_negotiated_dollar
-                        FROM public.hospital_dataset
-                        WHERE {where_clause}
-                        ORDER BY hospital_name, payer_name, plan_name
-                        LIMIT %s OFFSET %s
-                    """
-                    params.extend([per_page, offset])
-                    cur.execute(data_query, params)
-                    results = cur.fetchall()
-                else:
-                    results = []
-
-                duration = time.time() - start_time
-                logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
-                
-                return jsonify({
-                    'status': 'success',
-                    'data': results,
-                    'total': total_count,
-                    'page': page,
-                    'per_page': per_page,
-                    'total_pages': (total_count + per_page - 1) // per_page
-                })
+            duration = time.time() - start_time
+            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
+            
+            return jsonify({
+                'status': 'success',
+                'data': results,
+                'total': total_count
+            })
 
     except Exception as e:
         logger.error(f"Error fetching report data: {str(e)}")
