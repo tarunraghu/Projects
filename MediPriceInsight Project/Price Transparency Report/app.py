@@ -127,17 +127,45 @@ def get_report():
         # Get filter parameters
         code = request.args.get('code')
         fields = request.args.get('fields')
-        
+        cities = request.args.getlist('city')
+        regions = request.args.getlist('region')
+        hospital_names = request.args.getlist('hospital_name')
+        payer_names = request.args.getlist('payer_name')
+        plan_names = request.args.getlist('plan_name')
+
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Build WHERE clause
             conditions = []
             params = []
-            
+
             if code:
                 conditions.append("code = %s")
                 params.append(code)
-                
-                # If only specific fields are requested
+            if cities:
+                placeholders = ','.join(['%s'] * len(cities))
+                conditions.append(f"city IN ({placeholders})")
+                params.extend(cities)
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                conditions.append(f"region IN ({placeholders})")
+                params.extend(regions)
+            if hospital_names:
+                placeholders = ','.join(['%s'] * len(hospital_names))
+                conditions.append(f"hospital_name IN ({placeholders})")
+                params.extend(hospital_names)
+            if payer_names:
+                placeholders = ','.join(['%s'] * len(payer_names))
+                conditions.append(f"payer_name IN ({placeholders})")
+                params.extend(payer_names)
+            if plan_names:
+                placeholders = ','.join(['%s'] * len(plan_names))
+                conditions.append(f"plan_name IN ({placeholders})")
+                params.extend(plan_names)
+
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+            # For code queries, no pagination
+            if code:
                 if fields:
                     select_fields = fields
                 else:
@@ -148,56 +176,27 @@ def get_report():
                         standard_charge_min, standard_charge_max,
                         standard_charge_gross, standard_charge_negotiated_dollar
                     """
-                
-                where_clause = " AND ".join(conditions) if conditions else "1=1"
-                
-                # Query without pagination when fetching by code
                 data_query = f"""
                     SELECT {select_fields}
                     FROM public.hospital_dataset
                     WHERE {where_clause}
                     ORDER BY hospital_name, payer_name, plan_name
                 """
-                
                 cur.execute(data_query, params)
                 results = cur.fetchall()
                 total_count = len(results)
-                
                 duration = time.time() - start_time
                 logger.info(f"Data fetched in {duration:.2f}s - {total_count} rows")
-                
                 return jsonify({
                     'status': 'success',
                     'data': results,
                     'total': total_count
                 })
-            
             else:
                 # For non-code queries, keep pagination
                 page = int(request.args.get('page', 1))
                 per_page = int(request.args.get('per_page', 100))
                 offset = (page - 1) * per_page
-                
-                # Add other filters
-                city = request.args.get('city')
-                region = request.args.get('region')
-                payer_name = request.args.get('payer_name')
-                plan_name = request.args.get('plan_name')
-                
-                if city:
-                    conditions.append("city = %s")
-                    params.append(city)
-                if region:
-                    conditions.append("region = %s")
-                    params.append(region)
-                if payer_name:
-                    conditions.append("payer_name = %s")
-                    params.append(payer_name)
-                if plan_name:
-                    conditions.append("plan_name = %s")
-                    params.append(plan_name)
-
-                where_clause = " AND ".join(conditions) if conditions else "1=1"
 
                 # Get total count
                 count_query = f"""
@@ -230,7 +229,6 @@ def get_report():
 
                 duration = time.time() - start_time
                 logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
-                
                 return jsonify({
                     'status': 'success',
                     'data': results,
@@ -458,6 +456,246 @@ def summarize_data():
 
     summary = query_llm(prompt)
     return jsonify({"summary": summary})
+
+@app.route('/api/filters/regions')
+def get_regions():
+    try:
+        print("Connecting to DB for regions...")
+        conn = get_db_connection()
+        print("Connected. Creating cursor...")
+        with conn.cursor() as cur:
+            print("Executing query...")
+            cur.execute("SELECT DISTINCT region FROM public.hospital_dataset WHERE region IS NOT NULL ORDER BY region;")
+            regions = [row['region'] for row in cur.fetchall()]
+            print("Regions fetched:", regions)
+        return jsonify(regions)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/regions:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/filters/cities')
+def get_cities():
+    try:
+        regions = request.args.getlist('regions')
+        print("Requested regions for cities:", regions)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                query = f"""
+                    SELECT DISTINCT city FROM public.hospital_dataset
+                    WHERE region IN ({placeholders}) AND city IS NOT NULL
+                    ORDER BY city;
+                """
+                cur.execute(query, regions)
+            else:
+                query = """
+                    SELECT DISTINCT city FROM public.hospital_dataset
+                    WHERE city IS NOT NULL
+                    ORDER BY city;
+                """
+                cur.execute(query)
+            cities = [row['city'] for row in cur.fetchall()]
+            print("Cities fetched:", cities)
+        return jsonify(cities)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/cities:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/filters/codes')
+def get_codes_for_region_city():
+    try:
+        regions = request.args.getlist('regions')
+        cities = request.args.getlist('cities')
+        print("Requested codes for regions:", regions, "and cities:", cities)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            conditions = []
+            params = []
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                conditions.append(f"region IN ({placeholders})")
+                params.extend(regions)
+            if cities:
+                placeholders = ','.join(['%s'] * len(cities))
+                conditions.append(f"city IN ({placeholders})")
+                params.extend(cities)
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            query = f"""
+                SELECT DISTINCT code, description
+                FROM public.hospital_dataset
+                WHERE {where_clause} AND code IS NOT NULL
+                ORDER BY code;
+            """
+            cur.execute(query, params)
+            codes = [{'code': row['code'], 'description': row['description']} for row in cur.fetchall()]
+            print("Codes fetched:", codes)
+        return jsonify(codes)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/codes:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/filters/hospitals')
+def get_hospitals():
+    try:
+        regions = request.args.getlist('regions')
+        cities = request.args.getlist('cities')
+        code = request.args.get('code')
+        print("Requested hospitals for regions:", regions, "cities:", cities, "code:", code)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            conditions = []
+            params = []
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                conditions.append(f"region IN ({placeholders})")
+                params.extend(regions)
+            if cities:
+                placeholders = ','.join(['%s'] * len(cities))
+                conditions.append(f"city IN ({placeholders})")
+                params.extend(cities)
+            if code:
+                conditions.append("code = %s")
+                params.append(code)
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            query = f"""
+                SELECT DISTINCT hospital_name
+                FROM public.hospital_dataset
+                WHERE {where_clause} AND hospital_name IS NOT NULL
+                ORDER BY hospital_name;
+            """
+            cur.execute(query, params)
+            hospitals = [row['hospital_name'] for row in cur.fetchall()]
+            print("Hospitals fetched:", hospitals)
+        return jsonify(hospitals)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/hospitals:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/filters/payers')
+def get_payers():
+    try:
+        regions = request.args.getlist('regions')
+        cities = request.args.getlist('cities')
+        code = request.args.get('code')
+        hospitals = request.args.getlist('hospital_name')
+        print("Requested payers for regions:", regions, "cities:", cities, "code:", code, "hospitals:", hospitals)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            conditions = []
+            params = []
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                conditions.append(f"region IN ({placeholders})")
+                params.extend(regions)
+            if cities:
+                placeholders = ','.join(['%s'] * len(cities))
+                conditions.append(f"city IN ({placeholders})")
+                params.extend(cities)
+            if code:
+                conditions.append("code = %s")
+                params.append(code)
+            if hospitals:
+                placeholders = ','.join(['%s'] * len(hospitals))
+                conditions.append(f"hospital_name IN ({placeholders})")
+                params.extend(hospitals)
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            query = f'''
+                SELECT payer_name, COUNT(*) as count
+                FROM public.hospital_dataset
+                WHERE {where_clause} AND payer_name IS NOT NULL
+                GROUP BY payer_name
+                ORDER BY payer_name;
+            '''
+            print("SQL:", query)
+            print("Params:", params)
+            cur.execute(query, params)
+            payers = [{"name": row['payer_name'], "count": row['count']} for row in cur.fetchall()]
+            print("Payers fetched:", payers)
+        return jsonify(payers)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/payers:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.route('/api/filters/plans')
+def get_plans():
+    try:
+        regions = request.args.getlist('regions')
+        cities = request.args.getlist('cities')
+        code = request.args.get('code')
+        hospitals = request.args.getlist('hospital_name')
+        payers = request.args.getlist('payer_name')
+        print("Requested plans for regions:", regions, "cities:", cities, "code:", code, "hospitals:", hospitals, "payers:", payers)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            conditions = []
+            params = []
+            if regions:
+                placeholders = ','.join(['%s'] * len(regions))
+                conditions.append(f"region IN ({placeholders})")
+                params.extend(regions)
+            if cities:
+                placeholders = ','.join(['%s'] * len(cities))
+                conditions.append(f"city IN ({placeholders})")
+                params.extend(cities)
+            if code:
+                conditions.append("code = %s")
+                params.append(code)
+            if hospitals:
+                placeholders = ','.join(['%s'] * len(hospitals))
+                conditions.append(f"hospital_name IN ({placeholders})")
+                params.extend(hospitals)
+            if payers:
+                placeholders = ','.join(['%s'] * len(payers))
+                conditions.append(f"payer_name IN ({placeholders})")
+                params.extend(payers)
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            query = f'''
+                SELECT plan_name, COUNT(*) as count
+                FROM public.hospital_dataset
+                WHERE {where_clause} AND plan_name IS NOT NULL
+                GROUP BY plan_name
+                ORDER BY plan_name;
+            '''
+            print("SQL:", query)
+            print("Params:", params)
+            cur.execute(query, params)
+            plans = [{"name": row['plan_name'], "count": row['count']} for row in cur.fetchall()]
+            print("Plans fetched:", plans)
+        return jsonify(plans)
+    except Exception as e:
+        import traceback
+        print("Error in /api/filters/plans:", traceback.format_exc())
+        print("Exception message:", str(e))
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000) 
