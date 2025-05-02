@@ -17,38 +17,9 @@
         <!-- Filter Section -->
         <div class="card mb-4">
             <div class="card-body">
-                <form id="filtersForm">
-                    <div class="row g-3 align-items-end">
-                        <div class="col-md-3">
-                            <label for="regionFilter" class="form-label">Region</label>
-                            <select id="regionFilter" class="form-select select2" multiple></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="cityFilter" class="form-label">City</label>
-                            <select id="cityFilter" class="form-select select2" multiple disabled></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="codeFilter" class="form-label">Code or Description</label>
-                            <select id="codeFilter" class="form-select select2" disabled></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="hospital_nameFilter" class="form-label">Hospital Name</label>
-                            <select id="hospital_nameFilter" class="form-select select2" multiple disabled></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="payer_nameFilter" class="form-label">Payer Name</label>
-                            <select id="payer_nameFilter" class="form-select select2" multiple disabled></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="plan_nameFilter" class="form-label">Plan Name</label>
-                            <select id="plan_nameFilter" class="form-select select2" multiple disabled></select>
-                        </div>
-                        <div class="col-md-12 mt-2">
-                            <button type="button" id="clearFilters" class="btn btn-secondary">Clear Filters</button>
-                        </div>
-                    </div>
-                    <div id="activeFilters" class="mb-3"></div>
-                </form>
+                <div class="row" id="filterContainer">
+                    <!-- Filters will be dynamically added here -->
+                </div>
             </div>
         </div>
 

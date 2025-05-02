@@ -819,116 +819,110 @@ function resetDependentFilters(filterNames) {
 }
 
 // Update the table with filtered data
-function updateTable(data) {
-    // Define the columns you want to show
-    const columns = [
-        { key: 'hospital_name', label: 'Hospital Name' },
-        { key: 'code', label: 'Code' },
-        { key: 'description', label: 'Description' },
-        { key: 'city', label: 'City' },
-        { key: 'region', label: 'Region' },
-        { key: 'payer_name', label: 'Payer Name' },
-        { key: 'plan_name', label: 'Plan Name' },
-        { key: 'standard_charge_min', label: 'Standard Charge Min' },
-        { key: 'standard_charge_max', label: 'Standard Charge Max' },
-        { key: 'standard_charge_negotiated_dollar', label: 'Standard Charge Negotiated' }
-    ];
-
-    // Table sorting state
-    if (!window.tableSortState) {
-        window.tableSortState = { column: null, direction: 'asc' };
-    }
-
-    // Sort data if needed
-    if (window.tableSortState.column) {
-        const colKey = window.tableSortState.column;
-        const dir = window.tableSortState.direction;
-        data = [...data].sort((a, b) => {
-            let aVal = a[colKey] || '';
-            let bVal = b[colKey] || '';
-            // Try numeric sort if both are numbers
-            if (!isNaN(aVal) && !isNaN(bVal) && aVal !== '' && bVal !== '') {
-                aVal = parseFloat(aVal);
-                bVal = parseFloat(bVal);
-            }
-            if (aVal < bVal) return dir === 'asc' ? -1 : 1;
-            if (aVal > bVal) return dir === 'asc' ? 1 : -1;
-            return 0;
-        });
-    }
-
-    // Update thead
-    const thead = document.getElementById('tableHeader');
-    thead.innerHTML = '';
-    const headerRow = document.createElement('tr');
-    columns.forEach(col => {
-        const th = document.createElement('th');
-        th.style.verticalAlign = 'middle';
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = col.label;
-        th.appendChild(labelSpan);
-        // Add sort button
-        const sortBtn = document.createElement('button');
-        sortBtn.className = 'btn btn-link btn-sm p-0 ms-1';
-        sortBtn.innerHTML =
-            window.tableSortState.column === col.key
-                ? (window.tableSortState.direction === 'asc'
-                    ? '<span style="font-size:1.1em">▲</span>'
-                    : '<span style="font-size:1.1em">▼</span>')
-                : '<span style="font-size:1.1em;color:#bbb">⇅</span>';
-        sortBtn.onclick = () => {
-            if (window.tableSortState.column === col.key) {
-                window.tableSortState.direction = window.tableSortState.direction === 'asc' ? 'desc' : 'asc';
-            } else {
-                window.tableSortState.column = col.key;
-                window.tableSortState.direction = 'asc';
-            }
-            updateTable(data);
-        };
-        th.appendChild(sortBtn);
-        headerRow.appendChild(th);
-    });
-    thead.appendChild(headerRow);
-
-    // Add unique count row
-    const uniqueRow = document.createElement('tr');
-    columns.forEach(col => {
-        const uniqueVals = new Set(data.map(row => row[col.key] ?? ''));
-        const td = document.createElement('td');
-        td.style.textAlign = 'center';
-        td.style.fontSize = '0.9em';
-        td.style.color = '#673ab7';
-        td.innerHTML = `<strong>${uniqueVals.size}</strong> <span style="font-size:0.8em;color:#888;">unique</span>`;
-        uniqueRow.appendChild(td);
-    });
-    thead.appendChild(uniqueRow);
-
-    // Update tbody
-    const tbody = document.getElementById('reportTableBody');
-    tbody.innerHTML = '';
-    if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center">No data found for the selected filters</td></tr>';
+function updateTable() {
+    console.time('updateTable');
+    
+    if (!state.currentData.length) {
+        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">No data found for the selected filters</td></tr>';
         return;
     }
-    data.forEach(item => {
+
+    // Define the column mapping
+    const columnMap = {
+        'code': 'Code',
+        'description': 'Description',
+        'hospital_name': 'Hospital Name',
+        'hospital_address': 'Hospital Address',
+        'region': 'Region',
+        'city': 'City',
+        'payer_name': 'Payer Name',
+        'plan_name': 'Plan Name',
+        'standard_charge_min': 'Standard Charge Min',
+        'standard_charge_max': 'Standard Charge Max',
+        'standard_charge_gross': 'Standard Charge Gross',
+        'standard_charge_negotiated_dollar': 'Standard Charge Negotiated'
+    };
+
+    // Calculate unique counts for each column
+    const uniqueCounts = {};
+    Object.keys(columnMap).forEach(key => {
+        const uniqueValues = new Set(state.filteredData.map(item => 
+            item[key] !== null && item[key] !== undefined ? String(item[key]) : ''
+        ).filter(Boolean));
+        uniqueCounts[key] = uniqueValues.size;
+    });
+
+    // Setup table headers
+    const headerRow = document.createElement('tr');
+    Object.entries(columnMap).forEach(([key, headerText]) => {
+        const th = document.createElement('th');
+        const headerContent = document.createElement('div');
+        headerContent.className = 'd-flex align-items-center justify-content-between';
+        
+        const textSpan = document.createElement('span');
+        textSpan.textContent = headerText;
+        
+        const sortButton = document.createElement('button');
+        sortButton.className = 'btn btn-sort';
+        sortButton.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 3l4 4H4l4-4z"/>
+                <path d="M8 13l-4-4h8l-4 4z"/>
+            </svg>
+        `;
+        if (state.sortColumn === key) {
+            sortButton.classList.add(state.sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+        
+        sortButton.addEventListener('click', () => {
+            const newDirection = state.sortColumn === key && state.sortDirection === 'asc' ? 'desc' : 'asc';
+            state.sortColumn = key;
+            state.sortDirection = newDirection;
+            sortData();
+            updateTable();
+        });
+        headerContent.appendChild(sortButton);
+        headerContent.insertBefore(textSpan, headerContent.firstChild);
+        th.appendChild(headerContent);
+        headerRow.appendChild(th);
+    });
+    
+    tableHeader.innerHTML = '';
+    tableHeader.appendChild(headerRow);
+
+    // Add summary row
+    const summaryRow = document.createElement('tr');
+    summaryRow.className = 'summary-row';
+    Object.keys(columnMap).forEach(key => {
+        const td = document.createElement('td');
+        td.innerHTML = `
+            <strong>${uniqueCounts[key]?.toLocaleString() || '0'}</strong>
+            <span class="summary-label">unique</span>
+        `;
+        summaryRow.appendChild(td);
+    });
+    tableHeader.appendChild(summaryRow);
+
+    // Add data rows
+    const fragment = document.createDocumentFragment();
+    state.currentData.forEach(item => {
         const row = document.createElement('tr');
-        columns.forEach(col => {
+        Object.keys(columnMap).forEach(key => {
             const td = document.createElement('td');
-            let value = item[col.key] || '';
-            if ([
-                'standard_charge_min',
-                'standard_charge_max',
-                'standard_charge_negotiated_dollar'
-            ].includes(col.key) && value !== '') {
-                value = '$' + value;
+            const value = item[key];
+            td.textContent = formatValue(value, key);
+            if (key !== 'code' && (typeof value === 'number' || (value && !isNaN(value)))) {
                 td.className = 'text-end';
             }
-            td.textContent = value;
             row.appendChild(td);
         });
-        tbody.appendChild(row);
+        fragment.appendChild(row);
     });
-    $('.table-responsive').show();
+
+    reportTableBody.innerHTML = '';
+    reportTableBody.appendChild(fragment);
+    
+    console.timeEnd('updateTable');
 }
 
 // Sort data function
@@ -1453,269 +1447,4 @@ tableStyles.textContent = `
         overflow: hidden;
     }
 `;
-document.head.appendChild(tableStyles);
-
-// Fetch and populate the Region dropdown on page load
-async function populateRegionDropdown() {
-    try {
-        const response = await fetch('/api/filters/regions');
-        if (!response.ok) throw new Error('Failed to fetch regions');
-        const regions = await response.json();
-
-        const $region = $('#regionFilter');
-        $region.empty().append('<option></option>');
-        regions.forEach(region => {
-            $region.append(`<option value="${region}">${region}</option>`);
-        });
-        $region.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load regions');
-    }
-}
-
-// Fetch and populate the City dropdown based on selected regions
-async function populateCityDropdown(selectedRegions) {
-    try {
-        if (!selectedRegions || selectedRegions.length === 0) {
-            $('#cityFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-            return;
-        }
-        const params = new URLSearchParams();
-        selectedRegions.forEach(region => params.append('regions', region));
-        const response = await fetch(`/api/filters/cities?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch cities');
-        const cities = await response.json();
-        const $city = $('#cityFilter');
-        $city.empty().append('<option></option>');
-        cities.forEach(city => {
-            $city.append(`<option value="${city}">${city}</option>`);
-        });
-        $city.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load cities');
-    }
-}
-
-// Fetch and populate the Code dropdown based on selected regions and cities
-async function populateCodeDropdown(selectedRegions, selectedCities) {
-    try {
-        if (!selectedCities || selectedCities.length === 0) {
-            $('#codeFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-            return;
-        }
-        const params = new URLSearchParams();
-        selectedRegions.forEach(region => params.append('regions', region));
-        selectedCities.forEach(city => params.append('cities', city));
-        const response = await fetch(`/api/filters/codes?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch codes');
-        const codes = await response.json();
-        const $code = $('#codeFilter');
-        $code.empty().append('<option></option>');
-        codes.forEach(item => {
-            const label = item.description ? `${item.code} - ${item.description}` : item.code;
-            $code.append(`<option value="${item.code}">${label}</option>`);
-        });
-        $code.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load codes');
-    }
-}
-
-// Fetch and populate the Hospital Name dropdown based on selected regions, cities, and code
-async function populateHospitalDropdown(selectedRegions, selectedCities, selectedCode) {
-    try {
-        if (!selectedCode) {
-            $('#hospital_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-            return;
-        }
-        const params = new URLSearchParams();
-        selectedRegions.forEach(region => params.append('regions', region));
-        selectedCities.forEach(city => params.append('cities', city));
-        if (selectedCode) params.append('code', selectedCode);
-        const response = await fetch(`/api/filters/hospitals?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch hospitals');
-        const hospitals = await response.json();
-        const $hospital = $('#hospital_nameFilter');
-        $hospital.empty().append('<option></option>');
-        hospitals.forEach(hospital => {
-            $hospital.append(`<option value="${hospital}">${hospital}</option>`);
-        });
-        $hospital.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load hospitals');
-    }
-}
-
-// Populate Payer Name dropdown
-async function populatePayerDropdown(selectedRegions, selectedCities, selectedCode, selectedHospitals) {
-    try {
-        if (!selectedHospitals || selectedHospitals.length === 0) {
-            $('#payer_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-            return;
-        }
-        const params = new URLSearchParams();
-        selectedRegions.forEach(region => params.append('regions', region));
-        selectedCities.forEach(city => params.append('cities', city));
-        if (selectedCode) params.append('code', selectedCode);
-        selectedHospitals.forEach(hospital => params.append('hospital_name', hospital));
-        const response = await fetch(`/api/filters/payers?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch payers');
-        const payers = await response.json();
-        const $payer = $('#payer_nameFilter');
-        $payer.empty().append('<option></option>');
-        payers.forEach(payer => {
-            $payer.append(`<option value="${payer.name}">${payer.name} (${payer.count})</option>`);
-        });
-        $payer.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load payers');
-    }
-}
-
-// Populate Plan Name dropdown
-async function populatePlanDropdown(selectedRegions, selectedCities, selectedCode, selectedHospitals, selectedPayers) {
-    try {
-        if (!selectedPayers || selectedPayers.length === 0) {
-            $('#plan_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-            return;
-        }
-        const params = new URLSearchParams();
-        selectedRegions.forEach(region => params.append('regions', region));
-        selectedCities.forEach(city => params.append('cities', city));
-        if (selectedCode) params.append('code', selectedCode);
-        selectedHospitals.forEach(hospital => params.append('hospital_name', hospital));
-        selectedPayers.forEach(payer => params.append('payer_name', payer));
-        const response = await fetch(`/api/filters/plans?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch plans');
-        const plans = await response.json();
-        const $plan = $('#plan_nameFilter');
-        $plan.empty().append('<option></option>');
-        plans.forEach(plan => {
-            $plan.append(`<option value="${plan.name}">${plan.name} (${plan.count})</option>`);
-        });
-        $plan.prop('disabled', false).trigger('change');
-    } catch (error) {
-        showError('Could not load plans');
-    }
-}
-
-// Update fetchReport to accept all filters
-async function fetchReport(regions, cities, code, hospitals, payers, plans) {
-    try {
-        showLoading();
-        const params = new URLSearchParams();
-        regions.forEach(region => params.append('region', region));
-        cities.forEach(city => params.append('city', city));
-        params.append('code', code);
-        if (hospitals && hospitals.length) {
-            hospitals.forEach(hospital => params.append('hospital_name', hospital));
-        }
-        if (payers && payers.length) {
-            payers.forEach(payer => params.append('payer_name', payer));
-        }
-        if (plans && plans.length) {
-            plans.forEach(plan => params.append('plan_name', plan));
-        }
-        const response = await fetch(`/api/report?${params.toString()}`);
-        if (!response.ok) throw new Error('Failed to fetch report');
-        const result = await response.json();
-        updateTable(result.data || []);
-    } catch (error) {
-        showError('Could not load report');
-    } finally {
-        hideLoading();
-    }
-}
-
-// On page load, show all filters
-$(document).ready(async function() {
-    $('.table-responsive').hide();
-    $('#codeFilter').closest('.col-md-3').show();
-    $('#hospital_nameFilter').closest('.col-md-3').show();
-    $('#payer_nameFilter').closest('.col-md-3').show();
-    $('#plan_nameFilter').closest('.col-md-3').show();
-    $('#clearFilters').hide();
-
-    $('#cityFilter').closest('.col-md-3').show();
-    $('#cityFilter').prop('disabled', true);
-    $('#codeFilter').prop('disabled', true);
-    $('#hospital_nameFilter').prop('disabled', true);
-    $('#payer_nameFilter').prop('disabled', true);
-    $('#plan_nameFilter').prop('disabled', true);
-
-    showLoading();
-    $('#regionFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true });
-    $('#cityFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true });
-    $('#codeFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true, multiple: false });
-    $('#hospital_nameFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true, multiple: true });
-    $('#payer_nameFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true, multiple: true });
-    $('#plan_nameFilter').select2({ theme: 'bootstrap-5', width: '100%', allowClear: true, multiple: true });
-    await populateRegionDropdown();
-    $('#regionFilter').prop('disabled', false);
-    hideLoading();
-
-    // Region -> City
-    $('#regionFilter').on('change', async function() {
-        const selectedRegions = $(this).val() || [];
-        await populateCityDropdown(selectedRegions);
-        $('#codeFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#hospital_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#payer_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#plan_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('.table-responsive').hide();
-    });
-    // City -> Code
-    $('#cityFilter').on('change', async function() {
-        const selectedRegions = $('#regionFilter').val() || [];
-        const selectedCities = $(this).val() || [];
-        await populateCodeDropdown(selectedRegions, selectedCities);
-        $('#hospital_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#payer_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#plan_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('.table-responsive').hide();
-    });
-    // Code -> Hospital
-    $('#codeFilter').on('change', async function() {
-        const selectedRegions = $('#regionFilter').val() || [];
-        const selectedCities = $('#cityFilter').val() || [];
-        const selectedCode = $(this).val();
-        await populateHospitalDropdown(selectedRegions, selectedCities, selectedCode);
-        $('#payer_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('#plan_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('.table-responsive').hide();
-    });
-    // Hospital -> Payer
-    $('#hospital_nameFilter').on('change', async function() {
-        const selectedRegions = $('#regionFilter').val() || [];
-        const selectedCities = $('#cityFilter').val() || [];
-        const selectedCode = $('#codeFilter').val();
-        const selectedHospitals = $(this).val() || [];
-        await populatePayerDropdown(selectedRegions, selectedCities, selectedCode, selectedHospitals);
-        $('#plan_nameFilter').empty().append('<option></option>').prop('disabled', true).trigger('change');
-        $('.table-responsive').hide();
-    });
-    // Payer -> Plan
-    $('#payer_nameFilter').on('change', async function() {
-        const selectedRegions = $('#regionFilter').val() || [];
-        const selectedCities = $('#cityFilter').val() || [];
-        const selectedCode = $('#codeFilter').val();
-        const selectedHospitals = $('#hospital_nameFilter').val() || [];
-        const selectedPayers = $(this).val() || [];
-        await populatePlanDropdown(selectedRegions, selectedCities, selectedCode, selectedHospitals, selectedPayers);
-        $('.table-responsive').hide();
-    });
-    // Plan -> Table
-    $('#plan_nameFilter').on('change', async function() {
-        const selectedRegions = $('#regionFilter').val() || [];
-        const selectedCities = $('#cityFilter').val() || [];
-        const selectedCode = $('#codeFilter').val();
-        const selectedHospitals = $('#hospital_nameFilter').val() || [];
-        const selectedPayers = $('#payer_nameFilter').val() || [];
-        const selectedPlans = $(this).val() || [];
-        if (selectedCode) {
-            await fetchReport(selectedRegions, selectedCities, selectedCode, selectedHospitals, selectedPayers, selectedPlans);
-        } else {
-            $('.table-responsive').hide();
-        }
-    });
-}); 
+document.head.appendChild(tableStyles); 
