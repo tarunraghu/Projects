@@ -42,7 +42,13 @@ const state = {
     currentData: [],
     filteredData: [],
     allData: [],
-    filters: {},
+    filters: {
+        region: null,
+        city: null,
+        code: null,
+        payer_name: [],
+        plan_name: []
+    },
     filterOptions: {},
     currentPage: 1,
     perPage: 100,
@@ -50,46 +56,18 @@ const state = {
     isLoading: false,
     lastFetchTime: 0,
     sortColumn: null,
-    sortDirection: 'asc',
-    codeDescriptionMap: {},
-    descriptionsLoaded: false
+    sortDirection: 'asc'
 };
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', async () => {
     try {
-        // Wrap the table in a container
-        const tableResponsive = document.querySelector('.table-responsive');
-        const tableContainer = document.createElement('div');
-        tableContainer.className = 'table-container';
-        tableResponsive.parentNode.insertBefore(tableContainer, tableResponsive);
-        tableContainer.appendChild(tableResponsive);
-
-        // Add filter-container class
-        const filterContainer = document.getElementById('filterContainer');
-        filterContainer.className = 'filter-container row';
-
-        // Add dropdown state management
-        document.addEventListener('show.bs.dropdown', function(e) {
-            const filterContainer = e.target.closest('.filter-container');
-            if (filterContainer) {
-                filterContainer.style.zIndex = '1500';
-            }
-        });
-
-        document.addEventListener('hidden.bs.dropdown', function(e) {
-            const filterContainer = e.target.closest('.filter-container');
-            if (filterContainer) {
-                filterContainer.style.zIndex = '1';
-            }
-        });
-
         showLoading();
         await setupFilters();
         setupEventListeners();
         hideLoading();
         
-        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
+        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a region to view data</td></tr>';
     } catch (error) {
         console.error('Error during initialization:', error);
         showError('Failed to initialize the application. Please try again later.');
@@ -180,7 +158,7 @@ async function setupFilters() {
                 if (selectedRegion) {
                     try {
                         showLoading();
-                        // Fetch cities for the selected region using the new endpoint
+                        // Fetch cities for the selected region
                         const response = await fetch(`${API_ENDPOINT}/cities?region=${encodeURIComponent(selectedRegion)}`);
                         if (!response.ok) {
                             console.error('Failed to fetch cities:', response.status, response.statusText);
@@ -200,6 +178,13 @@ async function setupFilters() {
                             showError('No cities found for the selected region');
                             return;
                         }
+                        
+                        // Update state
+                        state.filters.region = selectedRegion;
+                        state.filters.city = null;
+                        state.filters.code = null;
+                        state.filters.payer_name = [];
+                        state.filters.plan_name = [];
                         
                         // Update city filter with the cities
                         const cityFilter = document.getElementById('cityFilter');
@@ -251,10 +236,16 @@ async function setupFilters() {
                 state.allData = [];
                 state.filteredData = [];
                 state.currentData = [];
+                state.filters = {
+                    region: null,
+                    city: null,
+                    code: null,
+                    payer_name: [],
+                    plan_name: []
+                };
                 
-                // Reset other filter values
+                // Reset all filter values
                 ['city', 'code', 'payer_name', 'plan_name'].forEach(key => {
-                    filterValues[key] = [];
                     const filter = $(`#${key}Filter`);
                     if (filter.length) {
                         filter.val(null).trigger('change');
@@ -289,11 +280,14 @@ async function setupFilters() {
                             return;
                         }
                         
-                        // Update state with the fetched data
-                        state.allData = data.data || [];
+                        // Update state
+                        state.filters.city = selectedCity;
+                        state.filters.code = null;
+                        state.filters.payer_name = [];
+                        state.filters.plan_name = [];
                         
                         // Extract unique codes with descriptions
-                        const uniqueCodes = [...new Set(state.allData.map(item => ({
+                        const uniqueCodes = [...new Set(data.data.map(item => ({
                             code: item.code,
                             description: item.description || ''
                         })))].filter(item => item.code).sort((a, b) => a.code.localeCompare(b.code));
@@ -354,10 +348,13 @@ async function setupFilters() {
                 state.allData = [];
                 state.filteredData = [];
                 state.currentData = [];
+                state.filters.city = null;
+                state.filters.code = null;
+                state.filters.payer_name = [];
+                state.filters.plan_name = [];
                 
                 // Reset dependent filter values
                 ['code', 'payer_name', 'plan_name'].forEach(key => {
-                    filterValues[key] = [];
                     const filter = $(`#${key}Filter`);
                     if (filter.length) {
                         filter.val(null).trigger('change');
@@ -377,6 +374,8 @@ async function setupFilters() {
                 if (selectedCode) {
                     try {
                         showLoading();
+                        console.log('Fetching data for code:', selectedCode);
+                        
                         // Fetch data for the selected code
                         const response = await fetch(`${API_ENDPOINT}/report?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(state.filters.city)}&code=${encodeURIComponent(selectedCode)}`);
                         if (!response.ok) {
@@ -386,16 +385,25 @@ async function setupFilters() {
                         }
                         
                         const data = await response.json();
+                        console.log('Received data:', data);
+                        
                         if (!data || !data.data) {
                             console.error('Invalid data received:', data);
                             showError('Invalid data received from server');
                             return;
                         }
                         
-                        // Update state with the fetched data
+                        // Update state
+                        state.filters.code = selectedCode;
                         state.allData = data.data || [];
                         state.filteredData = state.allData;
                         state.currentData = state.allData;
+                        
+                        console.log('Updated state with data:', {
+                            allDataCount: state.allData.length,
+                            filteredDataCount: state.filteredData.length,
+                            currentDataCount: state.currentData.length
+                        });
                         
                         // Extract unique payer names
                         const uniquePayerNames = [...new Set(state.allData.map(item => String(item.payer_name)))].filter(Boolean).sort();
@@ -408,6 +416,9 @@ async function setupFilters() {
                         
                         // Update table with the data
                         updateTable();
+                        
+                        // Log table update
+                        console.log('Table updated with data');
                     } catch (error) {
                         console.error('Error fetching data:', error);
                         showError('Failed to load data for the selected code');
@@ -416,8 +427,29 @@ async function setupFilters() {
                     }
                 }
             });
-        }
 
+            // Handle clear event
+            $(codeFilter).on('select2:clear', function() {
+                // Reset data and dependent filters
+                state.allData = [];
+                state.filteredData = [];
+                state.currentData = [];
+                state.filters.code = null;
+                state.filters.payer_name = [];
+                state.filters.plan_name = [];
+                
+                // Reset dependent filter values
+                ['payer_name', 'plan_name'].forEach(key => {
+                    const filter = $(`#${key}Filter`);
+                    if (filter.length) {
+                        filter.val(null).trigger('change');
+                    }
+                });
+                
+                // Update table
+                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
+            });
+        }
     } catch (error) {
         console.error('Error in setupFilters:', error);
         hideLoading();
@@ -435,7 +467,7 @@ async function loadRemainingDescriptions(codes, uniqueCodes) {
         const batch = codes.slice(i, i + batchSize);
         const batchPromises = batch.map(async code => {
             try {
-                const response = await fetch(`${API_ENDPOINT}?code=${code}`);
+                const response = await fetch(`${API_ENDPOINT}/report/codes?code=${encodeURIComponent(code)}`);
                 if (!response.ok) return { code, description: '' };
                 const data = await response.json();
                 return {
@@ -490,7 +522,7 @@ async function fetchData(page = 1, isInitialLoad = false) {
             const params = new URLSearchParams();
             params.append('code', state.filters.code);
             
-            const response = await fetch(`${API_ENDPOINT}?${params}`);
+            const response = await fetch(`${API_ENDPOINT}/report/codes?${params}`);
             
             if (!response.ok) throw new Error('Failed to fetch data');
             const result = await response.json();
@@ -890,6 +922,10 @@ function resetDependentFilters(filterNames) {
 // Update the table with filtered data
 function updateTable() {
     console.time('updateTable');
+    console.log('Updating table with data:', {
+        currentDataCount: state.currentData.length,
+        filteredDataCount: state.filteredData.length
+    });
     
     if (!state.currentData.length) {
         reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">No data found for the selected filters</td></tr>';
@@ -992,6 +1028,7 @@ function updateTable() {
     reportTableBody.appendChild(fragment);
     
     console.timeEnd('updateTable');
+    console.log('Table update completed');
 }
 
 // Sort data function
