@@ -42,7 +42,7 @@ const EXCLUDED_FILTERS = [
 
 const FILTER_ORDER = ['region', 'city', 'code', 'payer_name', 'plan_name', 'hospital_name'];
 const MANDATORY_FILTERS = ['region', 'city', 'code'];
-const MULTI_SELECT_FILTERS = ['city', 'payer_name', 'plan_name', 'hospital_name'];
+const MULTI_SELECT_FILTERS = []; // Empty array since all filters are now single-select
 const DEBOUNCE_DELAY = 300;
 
 // State management
@@ -185,15 +185,85 @@ function createFilterElement(column, isMandatory) {
 // Initialize Select2 for a filter
 function initializeSelect2(filter, placeholder) {
     console.log(`Initializing Select2 for ${filter.id} with placeholder: ${placeholder}`);
-    const isMultiSelect = MULTI_SELECT_FILTERS.includes(filter.id.replace('Filter', ''));
     
+    // Remove any existing styles
+    $('style[data-select2-style]').remove();
+    
+    // Add new styles
+    const style = document.createElement('style');
+    style.setAttribute('data-select2-style', 'true');
+    style.textContent = `
+        /* Base Select2 container */
+        .select2-container--bootstrap-5 {
+            width: 100% !important;
+        }
+        
+        /* Single select container */
+        .select2-container--bootstrap-5 .select2-selection--single {
+            height: 38px !important;
+            padding: 0.375rem 0.75rem !important;
+            background-color: #fff !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 0.375rem !important;
+        }
+        
+        /* Single select selected value */
+        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered {
+            color: #673ab7 !important;
+            font-weight: 500 !important;
+            padding: 0 !important;
+            line-height: 1.5 !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        
+        /* Selected chip for all filters */
+        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
+            background-color: #673ab7 !important;
+            color: white !important;
+            border: none !important;
+            padding: 0.25rem 0.5rem !important;
+            margin: 0 !important;
+            border-radius: 0.25rem !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 0.5rem !important;
+            font-size: 0.875rem !important;
+            line-height: 1.5 !important;
+        }
+        
+        /* Focus state */
+        .select2-container--bootstrap-5.select2-container--focus .select2-selection {
+            border-color: #673ab7 !important;
+            box-shadow: 0 0 0 0.2rem rgba(103, 58, 183, 0.25) !important;
+        }
+        
+        /* Dropdown */
+        .select2-container--bootstrap-5 .select2-dropdown {
+            border-color: #673ab7 !important;
+        }
+        
+        /* Highlighted option */
+        .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
+            background-color: #673ab7 !important;
+            color: white !important;
+        }
+        
+        /* Selected option */
+        .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
+            background-color: #e9ecef !important;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Initialize Select2
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
         placeholder: placeholder,
         allowClear: true,
-        multiple: isMultiSelect,
-        closeOnSelect: !isMultiSelect,
+        multiple: false,
+        closeOnSelect: true,
         templateResult: function(data) {
             if (!data.id) return data.text;
             return $('<span>').text(data.text);
@@ -203,42 +273,6 @@ function initializeSelect2(filter, placeholder) {
             return $('<span class="selected-chip">').text(data.text);
         }
     });
-
-    // Add custom styles for chips
-    const style = document.createElement('style');
-    style.textContent = `
-        .selected-chip {
-            background-color: #673ab7;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 4px;
-            margin: 2px;
-            display: inline-block;
-        }
-        
-        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice {
-            background-color: #673ab7;
-            color: white;
-            border: none;
-            padding: 2px 8px;
-            margin: 2px;
-            border-radius: 4px;
-        }
-        
-        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove {
-            color: white;
-            margin-left: 8px;
-            border: none;
-            background: transparent;
-            padding: 0 4px;
-        }
-        
-        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove:hover {
-            background-color: rgba(255, 255, 255, 0.2);
-            color: white;
-        }
-    `;
-    document.head.appendChild(style);
 }
 
 // Setup event listeners for filters
@@ -442,14 +476,13 @@ function updateOptionalFilter(filterName, values) {
     });
 
     // Initialize Select2 with proper configuration
-    const isMultiSelect = MULTI_SELECT_FILTERS.includes(filterName);
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
         placeholder: `Select ${formatColumnName(filterName)}...`,
         allowClear: true,
-        multiple: isMultiSelect,
-        closeOnSelect: !isMultiSelect,
+        multiple: false,
+        closeOnSelect: true,
         templateResult: function(data) {
             if (!data.id) return data.text;
             return $('<span>').text(data.text);
@@ -461,27 +494,15 @@ function updateOptionalFilter(filterName, values) {
     });
 
     // Add event listeners
-    $(filter).off('select2:select select2:clear select2:unselect').on({
+    $(filter).off('select2:select select2:clear').on({
         'select2:select': function(e) {
             console.log(`${filterName} selected:`, e.params.data.id);
-            if (isMultiSelect) {
-                const currentValues = state.filters[filterName] || [];
-                state.filters[filterName] = [...currentValues, e.params.data.id];
-            } else {
-                state.filters[filterName] = e.params.data.id;
-            }
+            state.filters[filterName] = e.params.data.id;
             handleFilterChange(filterName);
-        },
-        'select2:unselect': function(e) {
-            if (isMultiSelect) {
-                const currentValues = state.filters[filterName] || [];
-                state.filters[filterName] = currentValues.filter(v => v !== e.params.data.id);
-                handleFilterChange(filterName);
-            }
         },
         'select2:clear': function() {
             console.log(`${filterName} cleared`);
-            state.filters[filterName] = isMultiSelect ? [] : null;
+            state.filters[filterName] = null;
             handleFilterChange(filterName);
         }
     });
