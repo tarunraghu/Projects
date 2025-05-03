@@ -215,23 +215,14 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
             logger.info(f"Will create charges file at: {charges_file}")
             
             # Read JSON file and ensure it's parsed
-            with open(file_path, 'r', encoding='utf-8') as jsonfile:
-                try:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as jsonfile:
                     data = json.load(jsonfile)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON: {str(e)}")
-                    raise ValueError(f"Invalid JSON format: {str(e)}")
-                
-                if not isinstance(data, dict):
-                    try:
-                        if isinstance(data, str):
-                            data = json.loads(data)
-                        else:
-                            raise ValueError(f"Expected JSON object, got {type(data)}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse JSON string: {str(e)}")
-                        raise ValueError(f"Invalid JSON string format: {str(e)}")
-                
+            except UnicodeDecodeError as e_utf8:
+                logger.warning(f"UTF-8 decode failed: {e_utf8}. Trying cp1252 encoding.")
+                with open(file_path, 'r', encoding='cp1252') as jsonfile:
+                    data = json.load(jsonfile)
+            
             logger.info("Successfully parsed JSON data")
             
             # Extract address data with safe navigation
