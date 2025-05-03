@@ -205,32 +205,35 @@ def get_report():
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Get filter parameters
             region = request.args.get('region')
-            city = request.args.get('city')
+            city_param = request.args.get('city')
             code = request.args.get('code')
             payer_name = request.args.get('payer_name')
             plan_name = request.args.get('plan_name')
-            
+
+            # Support multiple cities
+            cities = [c.strip() for c in city_param.split(',')] if city_param else []
+
             # Validate required parameters
-            if not region or not city or not code:
+            if not region or not cities or not code:
                 return jsonify({
                     'status': 'error',
                     'message': 'Region, city, and code are required parameters',
                     'data': []
                 }), 400
-            
+
             # Build base WHERE clause with required parameters
             base_conditions = [
                 "region = %s",
-                "city = %s",
+                f"city IN ({', '.join(['%s'] * len(cities))})",
                 "code = %s"
             ]
-            base_params = [region, city, code]
+            base_params = [region] + cities + [code]
 
             # Get unique payer names and plan names first
             unique_payers_query = f"""
                 SELECT DISTINCT payer_name
                 FROM public.hospital_dataset
-                WHERE {" AND ".join(base_conditions)}
+                WHERE {' AND '.join(base_conditions)}
                 ORDER BY payer_name
             """
             cur.execute(unique_payers_query, base_params)
@@ -239,7 +242,7 @@ def get_report():
             unique_plans_query = f"""
                 SELECT DISTINCT plan_name
                 FROM public.hospital_dataset
-                WHERE {" AND ".join(base_conditions)}
+                WHERE {' AND '.join(base_conditions)}
                 ORDER BY plan_name
             """
             cur.execute(unique_plans_query, base_params)
@@ -322,7 +325,6 @@ def get_report():
             conn.close()
 
 @app.route('/api/report/codes')
-@cache.cached(timeout=3600)  # Cache for 1 hour since codes rarely change
 def get_codes():
     start_time = time.time()
     conn = get_db_connection()
@@ -333,45 +335,51 @@ def get_codes():
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Get filter parameters
             region = request.args.get('region')
-            city = request.args.get('city')
+            city_param = request.args.get('city')
             code = request.args.get('code')
-            
+
+            # Support multiple cities
+            cities = [c.strip() for c in city_param.split(',')] if city_param else []
+
             # Validate required parameters
-            if not region or not city:
+            if not region or not cities:
                 return jsonify({
                     'status': 'error',
                     'message': 'Region and city are required parameters',
                     'data': []
                 }), 400
-            
-            # Build WHERE clause with region and city
-            conditions = [
-                "region = %s",
-                "city = %s"
-            ]
-            params = [region, city]
 
-            # If specific code is requested, add it to the filter
+            # Build WHERE clause with region and city (multiple cities supported)
+            conditions = [
+                "region = %s"
+            ]
+            params = [region]
+
+            if cities:
+                conditions.append(f"city IN ({', '.join(['%s'] * len(cities))})")
+                params.extend(cities)
+            else:
+                conditions.append("city IS NOT NULL")
+
             if code:
                 conditions.append("code = %s")
                 params.append(code)
 
             where_clause = " AND ".join(conditions)
 
-            # Get distinct codes and descriptions for the selected region and city
+            # Get distinct codes and descriptions for the selected region and cities
             query = f"""
                 SELECT DISTINCT code, description 
                 FROM public.hospital_dataset 
                 WHERE {where_clause}
                 ORDER BY code
             """
-            
             cur.execute(query, params)
             results = cur.fetchall()
-            
+
             duration = time.time() - start_time
-            logger.info(f"Codes fetched in {duration:.2f}s - {len(results)} unique codes for {region}, {city}")
-            
+            logger.info(f"Codes fetched in {duration:.2f}s - {len(results)} unique codes for {region}, {cities}")
+
             return jsonify({
                 'status': 'success',
                 'data': results,

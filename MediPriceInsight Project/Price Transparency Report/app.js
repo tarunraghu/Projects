@@ -274,63 +274,27 @@ async function setupFilters() {
             $(cityFilter).on('select2:select', async function(e) {
                 state.filters.city = e.params.data.id;
                 console.log('City selected, state:', state.filters);
-                if (state.filters.city) {
+                // Only fetch codes if both region and city are selected
+                const codeFilter = document.getElementById('codeFilter');
+                if (state.filters.region && state.filters.city) {
+                    const params = new URLSearchParams({
+                        region: state.filters.region,
+                        city: state.filters.city
+                    });
                     try {
                         showLoading();
-                        console.log('City selected:', state.filters.city);
-                        
-                        // Fetch codes for the selected city
-                        const response = await fetch(`${API_ENDPOINT}/report/codes?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(state.filters.city)}`);
-                        if (!response.ok) {
-                            console.error('Failed to fetch codes:', response.status, response.statusText);
-                            showError('Failed to fetch codes');
-                            return;
-                        }
-                        
+                        const response = await fetch(`/api/report/codes?${params}`);
                         const data = await response.json();
-                        console.log('Received codes data:', data);
-                        
-                        if (!data || !data.data) {
-                            console.error('Invalid codes data received:', data);
-                            showError('Invalid data received from server');
-                            return;
-                        }
-                        
-                        // Update state
-                        state.filters.code = null;
-                        state.filters.payer_name = [];
-                        state.filters.plan_name = [];
-                        
-                        // Remove the city selection chip
-                        $(cityFilter).select2('destroy');
-                        $(cityFilter).val(state.filters.city).trigger('change');
-                        $(cityFilter).select2({
-                            theme: 'bootstrap-5',
-                            width: '100%',
-                            placeholder: 'Select City...',
-                            allowClear: true,
-                            minimumResultsForSearch: -1 // Hide search box
-                        });
-                        
                         // Extract unique codes with descriptions
                         const uniqueCodes = [...new Set(data.data.map(item => ({
                             code: item.code,
                             description: item.description || ''
                         })))].filter(item => item.code).sort((a, b) => a.code.localeCompare(b.code));
-                        
-                        console.log('Extracted unique codes:', uniqueCodes);
-                        
                         // Update code filter with codes and descriptions
-                        const codeFilter = document.getElementById('codeFilter');
                         if (codeFilter) {
-                            // Clear existing options
                             $(codeFilter).empty();
-                            
-                            // Add placeholder option
                             const placeholderOption = new Option('Select Code...', '', true, true);
                             $(codeFilter).append(placeholderOption);
-                            
-                            // Add code options with descriptions
                             uniqueCodes.forEach(item => {
                                 const optionText = item.description ? 
                                     `${item.code} - ${item.description}` : 
@@ -338,8 +302,6 @@ async function setupFilters() {
                                 const option = new Option(optionText, item.code);
                                 $(codeFilter).append(option);
                             });
-                            
-                            // Initialize Select2 if not already initialized
                             if (!$(codeFilter).hasClass('select2-hidden-accessible')) {
                                 $(codeFilter).select2({
                                     theme: 'bootstrap-5',
@@ -348,24 +310,30 @@ async function setupFilters() {
                                     allowClear: true
                                 });
                             } else {
-                                // Just trigger change to update the UI
                                 $(codeFilter).trigger('change');
                             }
-                            
-                            // Focus on the code filter
                             $(codeFilter).select2('open');
                         }
-                        
-                        // Reset dependent filters
-                        resetDependentFilters(['payer_name', 'plan_name']);
-                        
-                        // Clear table until code is selected
-                        reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
                     } catch (error) {
-                        console.error('Error fetching codes:', error);
                         showError('Failed to load codes for the selected city');
                     } finally {
                         hideLoading();
+                    }
+                } else {
+                    // If either region or city is missing, clear the code dropdown
+                    if (codeFilter) {
+                        $(codeFilter).empty();
+                        const placeholderOption = new Option('Select Code...', '', true, true);
+                        $(codeFilter).append(placeholderOption);
+                        if ($(codeFilter).hasClass('select2-hidden-accessible')) {
+                            $(codeFilter).select2('destroy');
+                        }
+                        $(codeFilter).select2({
+                            theme: 'bootstrap-5',
+                            width: '100%',
+                            placeholder: 'Select Code...',
+                            allowClear: true
+                        });
                     }
                 }
             });
@@ -1645,4 +1613,10 @@ function ensureOptionAndSetValue($select, value) {
         $select.append(new Option(value, value, true, true));
     }
     $select.val(value).trigger('change');
+}
+
+// Helper to get clean city value for API calls
+function getCleanCityValue(city) {
+    const cityArray = Array.isArray(city) ? city : [city];
+    return cityArray.filter(Boolean).join(',');
 } 
