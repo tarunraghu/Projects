@@ -303,6 +303,17 @@ async function setupFilters() {
                         state.filters.payer_name = [];
                         state.filters.plan_name = [];
                         
+                        // Remove the city selection chip
+                        $(cityFilter).select2('destroy');
+                        $(cityFilter).val(selectedCity).trigger('change');
+                        $(cityFilter).select2({
+                            theme: 'bootstrap-5',
+                            width: '100%',
+                            placeholder: 'Select City...',
+                            allowClear: true,
+                            minimumResultsForSearch: -1 // Hide search box
+                        });
+                        
                         // Extract unique codes with descriptions
                         const uniqueCodes = [...new Set(data.data.map(item => ({
                             code: item.code,
@@ -420,6 +431,18 @@ async function setupFilters() {
                         state.allData = data.data || [];
                         state.filteredData = state.allData;
                         state.currentData = state.allData;
+                        
+                        // Ensure region and city are maintained in the UI
+                        const regionFilter = document.getElementById('regionFilter');
+                        const cityFilter = document.getElementById('cityFilter');
+                        
+                        if (regionFilter && state.filters.region) {
+                            $(regionFilter).val(state.filters.region).trigger('change');
+                        }
+                        
+                        if (cityFilter && state.filters.city) {
+                            $(cityFilter).val(state.filters.city).trigger('change');
+                        }
                         
                         console.log('Updated state with data:', {
                             allDataCount: state.allData.length,
@@ -965,12 +988,12 @@ async function updateDependentFilters(changedFilter) {
         
         // Special handling for city selection
         if (changedFilter === 'city') {
-            const selectedCities = state.filters.city || [];
-            if (selectedCities.length > 0) {
-                // Filter data based on selected cities
-                filteredData = filteredData.filter(item => selectedCities.includes(String(item.city)));
+            const selectedCity = state.filters.city;
+            if (selectedCity) {
+                // Filter data based on selected city
+                filteredData = filteredData.filter(item => item.city === selectedCity);
                 
-                // Get unique codes for the selected cities
+                // Get unique codes for the selected city
                 const uniqueCodes = [...new Set(filteredData.map(item => item.code))].filter(Boolean);
                 
                 // Update code filter with counts
@@ -999,9 +1022,9 @@ async function updateDependentFilters(changedFilter) {
                 currentData = currentData.filter(item => item.region === selectedRegion);
             }
             
-            const selectedCities = state.filters.city || [];
-            if (selectedCities.length > 0) {
-                currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
+            const selectedCity = state.filters.city;
+            if (selectedCity) {
+                currentData = currentData.filter(item => item.city === selectedCity);
             }
             
             const selectedCode = state.filters.code;
@@ -1009,46 +1032,33 @@ async function updateDependentFilters(changedFilter) {
                 currentData = currentData.filter(item => item.code === selectedCode);
             }
             
-            console.log('Current data for payer name filter:', currentData);
+            // Get unique payer names for the current filters
+            const uniquePayers = [...new Set(currentData.map(item => item.payer_name))].filter(Boolean);
+            updateFilterOptions('payer_name', uniquePayers);
             
-            // Update payer_name options
-            const uniquePayerNames = [...new Set(currentData.map(item => String(item.payer_name)))].filter(Boolean).sort();
-            console.log('Unique payer names:', uniquePayerNames);
-            
-            updateFilterOptions('payer_name', uniquePayerNames);
-            
-            // Reset plan_name as it depends on payer_name
-            resetDependentFilters(['plan_name']);
+            // Get unique plan names for the current filters
+            const uniquePlans = [...new Set(currentData.map(item => item.plan_name))].filter(Boolean);
+            updateFilterOptions('plan_name', uniquePlans);
         }
-
-        // Update plan_name based on all previous selections
-        if (changedFilter === 'payer_name' || changedFilter === 'code' || changedFilter === 'city' || changedFilter === 'region') {
-            let currentData = filteredData;
-            
-            // Apply all previous filters
-            const selectedRegion = state.filters.region;
-            if (selectedRegion) {
-                currentData = currentData.filter(item => item.region === selectedRegion);
-            }
-            
-            const selectedCities = state.filters.city || [];
-            if (selectedCities.length > 0) {
-                currentData = currentData.filter(item => selectedCities.includes(String(item.city)));
-            }
-            
+        
+        // If code is selected, ensure region and city are maintained
+        if (changedFilter === 'code') {
             const selectedCode = state.filters.code;
             if (selectedCode) {
-                currentData = currentData.filter(item => item.code === selectedCode);
+                // Find the region and city for the selected code
+                const codeData = state.allData.find(item => item.code === selectedCode);
+                if (codeData) {
+                    // Update the state with the found region and city
+                    state.filters.region = codeData.region;
+                    state.filters.city = codeData.city;
+                    
+                    // Update the UI to reflect these values
+                    const regionFilter = document.getElementById('regionFilter');
+                    const cityFilter = document.getElementById('cityFilter');
+                    if (regionFilter) $(regionFilter).val(codeData.region).trigger('change');
+                    if (cityFilter) $(cityFilter).val(codeData.city).trigger('change');
+                }
             }
-            
-            const selectedPayerNames = state.filters.payer_name || [];
-            if (selectedPayerNames.length > 0) {
-                currentData = currentData.filter(item => selectedPayerNames.includes(String(item.payer_name)));
-            }
-            
-            // Update plan_name options
-            const uniquePlanNames = [...new Set(currentData.map(item => String(item.plan_name)))].filter(Boolean).sort();
-            updateFilterOptions('plan_name', uniquePlanNames);
         }
 
         // Apply filters and update table
@@ -1243,7 +1253,8 @@ function setupEventListeners() {
             const filter = document.getElementById(`${column}Filter`);
             if (filter) {
                 $(filter).on('select2:select select2:clear', async (e) => {
-                    state.filters[column] = e.type === 'select2:clear' ? '' : e.params?.data?.id || '';
+                    const selectedCode = e.type === 'select2:clear' ? '' : e.params?.data?.id || '';
+                    state.filters[column] = selectedCode;
                     
                     if (e.type === 'select2:clear') {
                         // Clear everything
@@ -1251,17 +1262,25 @@ function setupEventListeners() {
                         state.filteredData = [];
                         state.allData = [];
                         reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
-                        resetDependentFilters(['region', 'city', 'payer_name', 'plan_name']);
+                        resetDependentFilters(['payer_name', 'plan_name']);
                     } else {
                         // Fetch all data for the selected code
                         await fetchData(1, true);
                         
-                        // Update region options based on the selected code
-                        const uniqueRegions = [...new Set(state.allData.map(item => String(item.region)))].filter(Boolean).sort();
-                        updateFilterOptions('region', uniqueRegions);
+                        // Update dependent filters
+                        await updateDependentFilters('code');
                         
-                        // Reset other dependent filters
-                        resetDependentFilters(['city', 'payer_name', 'plan_name']);
+                        // Ensure region and city are maintained in the UI
+                        const regionFilter = document.getElementById('regionFilter');
+                        const cityFilter = document.getElementById('cityFilter');
+                        
+                        if (regionFilter && state.filters.region) {
+                            $(regionFilter).val(state.filters.region).trigger('change');
+                        }
+                        
+                        if (cityFilter && state.filters.city) {
+                            $(cityFilter).val(state.filters.city).trigger('change');
+                        }
                         
                         updateTable();
                     }
