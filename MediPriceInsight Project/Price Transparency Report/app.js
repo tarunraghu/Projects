@@ -209,6 +209,10 @@ function initializeSelect2(filter, placeholder) {
     $(filter).next('.select2-container').off('click', '.chip-close').on('click', '.chip-close', function(e) {
         e.stopPropagation();
         $(filter).val(null).trigger('change');
+        // Also update state and call handleFilterChange for this filter
+        const filterName = filter.id.replace('Filter', '');
+        state.filters[filterName] = null;
+        handleFilterChange(filterName);
     });
 }
 
@@ -303,22 +307,22 @@ async function handleFilterChange(changedFilter) {
             case 'plan_name':
             case 'hospital_name':
                 if (region && city && code) {
-                    console.log(`Filtering by ${changedFilter}:`, state.filters[changedFilter]);
-                    let filteredData = state.allData;
-                    
-                    // Apply all optional filters
-                    if (payer_name) {
-                        filteredData = filteredData.filter(item => item.payer_name === payer_name);
-                    }
-                    if (plan_name) {
-                        filteredData = filteredData.filter(item => item.plan_name === plan_name);
-                    }
-                    if (hospital_name) {
-                        filteredData = filteredData.filter(item => item.hospital_name === hospital_name);
-                    }
-                    
-                    state.filteredData = filteredData;
-                    state.currentData = filteredData;
+                    // Always fetch from the endpoint with the current filter state
+                    let url = `/api/report?region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}&code=${encodeURIComponent(code)}`;
+                    if (state.filters.payer_name) url += `&payer_name=${encodeURIComponent(state.filters.payer_name)}`;
+                    if (state.filters.plan_name) url += `&plan_name=${encodeURIComponent(state.filters.plan_name)}`;
+                    if (state.filters.hospital_name) url += `&hospital_name=${encodeURIComponent(state.filters.hospital_name)}`;
+
+                    console.log('Fetching data from:', url);
+
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const data = await response.json();
+
+                    state.allData = data.data || [];
+                    state.filteredData = state.allData;
+                    state.currentData = state.allData;
+
                     updateTable();
                 }
                 break;
@@ -448,6 +452,9 @@ function updateOptionalFilter(filterName, values) {
     $(filter).next('.select2-container').off('click', '.chip-close').on('click', '.chip-close', function(e) {
         e.stopPropagation();
         $(filter).val(null).trigger('change');
+        // Also update state and call handleFilterChange for this filter
+        state.filters[filterName] = null;
+        handleFilterChange(filterName);
     });
 }
 
