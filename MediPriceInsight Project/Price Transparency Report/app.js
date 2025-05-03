@@ -841,6 +841,13 @@ function updateTable() {
         filteredDataCount: state.filteredData.length
     });
     
+    // Show/hide Export to CSV button
+    if (state.currentData && state.currentData.length > 0) {
+        exportButton.style.display = '';
+    } else {
+        exportButton.style.display = 'none';
+    }
+    
     if (!state.currentData.length) {
         reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">No data found for the selected filters</td></tr>';
         return;
@@ -879,7 +886,14 @@ function updateTable() {
         headerContent.className = 'd-flex align-items-center justify-content-between';
         
         const textSpan = document.createElement('span');
-        textSpan.textContent = headerText;
+        // Word wrap for Standard Charge columns
+        if (headerText.startsWith('Standard Charge')) {
+            const parts = headerText.split(' ');
+            // Join 'Standard Charge' and put the rest on the next line
+            textSpan.innerHTML = 'Standard Charge<br>' + parts.slice(2).join(' ');
+        } else {
+            textSpan.textContent = headerText;
+        }
         
         const sortButton = document.createElement('button');
         sortButton.className = 'btn btn-sort';
@@ -903,6 +917,9 @@ function updateTable() {
         headerContent.appendChild(sortButton);
         headerContent.insertBefore(textSpan, headerContent.firstChild);
         th.appendChild(headerContent);
+        // Add word-wrap CSS for all headers
+        th.style.whiteSpace = 'normal';
+        th.style.wordBreak = 'break-word';
         headerRow.appendChild(th);
     });
     
@@ -1392,6 +1409,8 @@ tableStyles.textContent = `
         border-right: 1px solid #000;
         border-bottom: 1px solid #000;
         padding: 8px;
+        white-space: normal !important;
+        word-break: break-word !important;
     }
     
     .table th:last-child,
@@ -1518,8 +1537,10 @@ resetButton.onclick = function() {
     state.allData = [];
     state.filteredData = [];
     state.currentData = [];
-    // Update table
-    reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a region to view data</td></tr>';
+    // Update table: make it fully blank
+    reportTableBody.innerHTML = '';
+    tableHeader.innerHTML = '';
+    exportButton.style.display = 'none'; // Hide export button on reset
     // Optionally, reset pagination
     state.currentPage = 1;
     state.totalPages = 1;
@@ -1575,4 +1596,66 @@ chipStyles.textContent = `
         align-items: center !important;
     }
 `;
-document.head.appendChild(chipStyles); 
+document.head.appendChild(chipStyles);
+
+// Add Export to CSV button above the table
+const exportButton = document.createElement('button');
+exportButton.textContent = 'Export to CSV';
+exportButton.className = 'btn btn-primary mb-3';
+exportButton.style.marginRight = '10px';
+exportButton.style.display = 'none'; // Hide by default
+exportButton.onclick = function() {
+    exportTableToCSV();
+};
+// Insert the button above the table container (after filters)
+const tableContainer = document.querySelector('.table-responsive');
+tableContainer.parentNode.insertBefore(exportButton, tableContainer);
+
+// Export to CSV function
+function exportTableToCSV() {
+    if (!state.currentData || state.currentData.length === 0) {
+        alert('No data to export!');
+        return;
+    }
+    // Use the same columns as the table
+    const columnMap = {
+        'region': 'Region',
+        'city': 'City',
+        'code': 'Code',
+        'description': 'Description',
+        'hospital_name': 'Hospital Name',
+        'hospital_address': 'Hospital Address',
+        'payer_name': 'Payer Name',
+        'plan_name': 'Plan Name',
+        'standard_charge_min': 'Standard Charge Min',
+        'standard_charge_max': 'Standard Charge Max',
+        'standard_charge_gross': 'Standard Charge Gross',
+        'standard_charge_negotiated_dollar': 'Standard Charge Negotiated'
+    };
+    const headers = Object.values(columnMap);
+    const keys = Object.keys(columnMap);
+    const csvRows = [];
+    csvRows.push(headers.join(','));
+    state.currentData.forEach(row => {
+        const values = keys.map(key => {
+            let val = row[key];
+            if (val === null || val === undefined) return '';
+            val = String(val).replace(/"/g, '""'); // Escape quotes
+            if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+                val = '"' + val + '"';
+            }
+            return val;
+        });
+        csvRows.push(values.join(','));
+    });
+    const csvContent = csvRows.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'MediPriceInsight_Report.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+} 
