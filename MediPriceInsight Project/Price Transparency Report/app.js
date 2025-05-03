@@ -204,10 +204,6 @@ async function setupFilters() {
                             // Clear existing options
                             $(cityFilter).empty();
                             
-                            // Add placeholder option
-                            const placeholderOption = new Option('Select City...', '', true, true);
-                            $(cityFilter).append(placeholderOption);
-                            
                             // Add city options
                             cities.forEach(city => {
                                 const option = new Option(city, city);
@@ -221,8 +217,9 @@ async function setupFilters() {
                             $(cityFilter).select2({
                                 theme: 'bootstrap-5',
                                 width: '100%',
-                                placeholder: 'Select City...',
-                                allowClear: true
+                                placeholder: ' ',
+                                allowClear: true,
+                                multiple: false
                             });
                         }
                         
@@ -418,12 +415,13 @@ async function setupFilters() {
             $(payerNameFilter).on('select2:select select2:unselect', async function(e) {
                 const selectedPayerNames = $(this).val() || [];
                 state.filters.payer_name = selectedPayerNames;
-                // Only fetch if a payer is selected
-                if (selectedPayerNames.length > 0) {
+                const cityValue = getCleanCityValue(state.filters.city);
+                // Only fetch if region, city, code, and payer_name are set
+                if (state.filters.region && cityValue && state.filters.code && selectedPayerNames.length > 0) {
                     // Only support one payer at a time for now
                     const params = new URLSearchParams({
                         region: state.filters.region,
-                        city: state.filters.city,
+                        city: cityValue,
                         code: state.filters.code,
                         payer_name: selectedPayerNames[0]
                     });
@@ -440,7 +438,7 @@ async function setupFilters() {
                     } finally {
                         hideLoading();
                     }
-                } else {
+                } else if (selectedPayerNames.length === 0) {
                     // If no payer selected, show all data for code/region/city
                     state.filteredData = state.allData;
                     state.currentData = state.allData;
@@ -1654,8 +1652,7 @@ function updatePayerNameDropdown() {
         // Extract unique payer names from the current data
         const uniquePayerNames = [...new Set(state.currentData.map(item => String(item.payer_name)))].filter(Boolean).sort();
         $(payerNameFilter).empty();
-        const placeholderOption = new Option('Select Payer Name...', '', true, true);
-        $(payerNameFilter).append(placeholderOption);
+        // No placeholder option
         uniquePayerNames.forEach(payerName => {
             const option = new Option(payerName, payerName);
             $(payerNameFilter).append(option);
@@ -1666,9 +1663,13 @@ function updatePayerNameDropdown() {
         $(payerNameFilter).select2({
             theme: 'bootstrap-5',
             width: '100%',
-            placeholder: 'Select Payer Name...',
+            placeholder: ' ', // No generic text
             allowClear: true,
-            multiple: true
+            multiple: true,
+            templateSelection: function (data) {
+                if (data.length === 0) return '';
+                return data.map(d => d.text).join(', ');
+            }
         });
     }
 } 
