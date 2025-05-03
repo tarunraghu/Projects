@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, send_from_directory, request, make_response
 from flask_caching import Cache
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -32,42 +32,51 @@ DB_PORT = os.getenv('DB_PORT', '5432')
 
 OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
 
-# Performance monitoring
-def log_performance(func_name, start_time, row_count=None):
-    duration = time.time() - start_time
-    if row_count:
-        logger.info(f"Performance: {func_name} - {duration:.2f}s - {row_count} rows")
-    else:
-        logger.info(f"Performance: {func_name} - {duration:.2f}s")
-
 def get_db_connection():
-    logger.info("Attempting to connect to database...")
+    """Create and return a database connection"""
     try:
         conn = psycopg2.connect(
             host=DB_HOST,
             database=DB_NAME,
             user=DB_USER,
             password=DB_PASSWORD,
-            port=DB_PORT,
-            cursor_factory=RealDictCursor
+            port=DB_PORT
         )
-        logger.info("Database connection successful")
         return conn
     except Exception as e:
-        logger.error(f"Database connection failed: {str(e)}")
-        raise
+        logger.error(f"Database connection error: {str(e)}")
+        return None
+
+# Add response headers for modern browser compatibility
+@app.after_request
+def add_header(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;"
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/')
 def serve_index():
-    return send_from_directory('.', 'index.html')
+    response = make_response(send_from_directory('.', 'index.html'))
+    response.headers['Content-Type'] = 'text/html; charset=utf-8'
+    return response
 
 @app.route('/styles.css')
 def serve_css():
-    return send_from_directory('.', 'styles.css')
+    response = make_response(send_from_directory('.', 'styles.css'))
+    response.headers['Content-Type'] = 'text/css; charset=utf-8'
+    return response
 
 @app.route('/app.js')
 def serve_js():
-    return send_from_directory('.', 'app.js')
+    response = make_response(send_from_directory('.', 'app.js'))
+    response.headers['Content-Type'] = 'application/javascript; charset=utf-8'
+    return response
 
 def get_distinct_values(cur, column):
     """Helper function to get distinct values for a column"""
@@ -558,4 +567,10 @@ def summarize_data():
     return jsonify({"summary": summary})
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000) 
+    # Configure server for HTTP/2
+    app.run(
+        debug=True,
+        port=5000,
+        threaded=True,
+        extra_files=['index.html', 'styles.css', 'app.js']
+    ) 

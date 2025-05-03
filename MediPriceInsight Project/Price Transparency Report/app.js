@@ -113,14 +113,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 $(regionFilter).select2('destroy');
             }
             initializeSelect2(regionFilter, 'Select Region...');
-            
-            // Add direct event listener for region selection
-            $(regionFilter).on('select2:select', async function(e) {
-                console.log('Region selected:', e.params.data);
-                state.filters.region = e.params.data.id;
-                console.log('Updated state.filters.region:', state.filters.region);
-                await handleFilterChange('region');
-            });
         }
         
         hideLoading();
@@ -222,7 +214,7 @@ function initializeSelect2(filter, placeholder) {
             background-color: #673ab7 !important;
             color: white !important;
             border: none !important;
-            padding: 0.25rem 0.5rem !important;
+            padding: 0.25rem 0.75rem !important;
             margin: 0 !important;
             border-radius: 0.25rem !important;
             display: inline-flex !important;
@@ -230,6 +222,7 @@ function initializeSelect2(filter, placeholder) {
             gap: 0.5rem !important;
             font-size: 0.875rem !important;
             line-height: 1.5 !important;
+            min-height: 28px !important;
         }
         
         /* Focus state */
@@ -245,18 +238,38 @@ function initializeSelect2(filter, placeholder) {
         
         /* Highlighted option */
         .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
-            background-color: #673ab7 !important;
+            background-color: #000080 !important;
             color: white !important;
         }
         
         /* Selected option */
         .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
-            background-color: #e9ecef !important;
+            background-color: #000080 !important;
+            color: white !important;
+        }
+
+        /* Clear button */
+        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear {
+            color: #673ab7 !important;
+            font-size: 1.25rem !important;
+            padding: 0 0.5rem !important;
+        }
+
+        /* Clear button hover */
+        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear:hover {
+            color: #000080 !important;
+        }
+
+        /* Ensure chip visibility for all filters */
+        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
+            display: inline-flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
         }
     `;
     document.head.appendChild(style);
 
-    // Initialize Select2
+    // Initialize Select2 with updated configuration
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
@@ -270,7 +283,8 @@ function initializeSelect2(filter, placeholder) {
         },
         templateSelection: function(data) {
             if (!data.id) return data.text;
-            return $('<span class="selected-chip">').text(data.text);
+            const chip = $('<span class="selected-chip">').text(data.text);
+            return chip;
         }
     });
 }
@@ -307,12 +321,6 @@ async function handleFilterChange(changedFilter) {
         
         const { region, city, code, payer_name, plan_name, hospital_name } = state.filters;
         
-        // Convert arrays to comma-separated strings for API calls
-        const cityParam = Array.isArray(city) ? city.join(',') : city;
-        const payerNameParam = Array.isArray(payer_name) ? payer_name.join(',') : payer_name;
-        const planNameParam = Array.isArray(plan_name) ? plan_name.join(',') : plan_name;
-        const hospitalNameParam = Array.isArray(hospital_name) ? hospital_name.join(',') : hospital_name;
-        
         switch (changedFilter) {
             case 'region':
                 if (region) {
@@ -320,30 +328,30 @@ async function handleFilterChange(changedFilter) {
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const cities = await response.json();
                     updateCityFilter(cities);
-                    state.filters.city = [];
+                    state.filters.city = null;
                     state.filters.code = null;
-                    state.filters.payer_name = [];
-                    state.filters.plan_name = [];
-                    state.filters.hospital_name = [];
+                    state.filters.payer_name = null;
+                    state.filters.plan_name = null;
+                    state.filters.hospital_name = null;
                 }
                 break;
                 
             case 'city':
                 if (region && city) {
-                    const response = await fetch(`/api/report/codes?region=${encodeURIComponent(region)}&city=${encodeURIComponent(cityParam)}`);
+                    const response = await fetch(`/api/report/codes?region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}`);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const data = await response.json();
                     updateCodeFilter(data.data || []);
                     state.filters.code = null;
-                    state.filters.payer_name = [];
-                    state.filters.plan_name = [];
-                    state.filters.hospital_name = [];
+                    state.filters.payer_name = null;
+                    state.filters.plan_name = null;
+                    state.filters.hospital_name = null;
                 }
                 break;
                 
             case 'code':
                 if (region && city && code) {
-                    const url = `/api/report?region=${encodeURIComponent(region)}&city=${encodeURIComponent(cityParam)}&code=${encodeURIComponent(code)}`;
+                    const url = `/api/report?region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}&code=${encodeURIComponent(code)}`;
                     console.log('Fetching data from:', url);
                     
                     const response = await fetch(url);
@@ -359,13 +367,14 @@ async function handleFilterChange(changedFilter) {
                     const uniquePlans = [...new Set(state.allData.map(item => item.plan_name).filter(Boolean))].sort();
                     const uniqueHospitals = [...new Set(state.allData.map(item => item.hospital_name).filter(Boolean))].sort();
                     
+                    // Initialize Select2 for optional filters
                     updateOptionalFilter('payer_name', uniquePayers);
                     updateOptionalFilter('plan_name', uniquePlans);
                     updateOptionalFilter('hospital_name', uniqueHospitals);
                     
-                    state.filters.payer_name = [];
-                    state.filters.plan_name = [];
-                    state.filters.hospital_name = [];
+                    state.filters.payer_name = null;
+                    state.filters.plan_name = null;
+                    state.filters.hospital_name = null;
                     
                     updateTable();
                 }
@@ -379,14 +388,14 @@ async function handleFilterChange(changedFilter) {
                     let filteredData = state.allData;
                     
                     // Apply all optional filters
-                    if (payer_name && payer_name.length > 0) {
-                        filteredData = filteredData.filter(item => payer_name.includes(item.payer_name));
+                    if (payer_name) {
+                        filteredData = filteredData.filter(item => item.payer_name === payer_name);
                     }
-                    if (plan_name && plan_name.length > 0) {
-                        filteredData = filteredData.filter(item => plan_name.includes(item.plan_name));
+                    if (plan_name) {
+                        filteredData = filteredData.filter(item => item.plan_name === plan_name);
                     }
-                    if (hospital_name && hospital_name.length > 0) {
-                        filteredData = filteredData.filter(item => hospital_name.includes(item.hospital_name));
+                    if (hospital_name) {
+                        filteredData = filteredData.filter(item => item.hospital_name === hospital_name);
                     }
                     
                     state.filteredData = filteredData;
@@ -489,7 +498,8 @@ function updateOptionalFilter(filterName, values) {
         },
         templateSelection: function(data) {
             if (!data.id) return data.text;
-            return $('<span class="selected-chip">').text(data.text);
+            const chip = $('<span class="selected-chip">').text(data.text);
+            return chip;
         }
     });
 
@@ -1588,4 +1598,53 @@ resetButton.onclick = function() {
     updatePagination();
 };
 // Insert the button above the filter container
-filterContainer.parentNode.insertBefore(resetButton, filterContainer); 
+filterContainer.parentNode.insertBefore(resetButton, filterContainer);
+
+// Add CSS to ensure proper chip display for all filters
+const chipStyles = document.createElement('style');
+chipStyles.textContent = `
+    /* Selected chip for all filters */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
+        background-color: #673ab7 !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.25rem 0.75rem !important;
+        margin: 0 !important;
+        border-radius: 0.25rem !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+        font-size: 0.875rem !important;
+        line-height: 1.5 !important;
+        min-height: 28px !important;
+    }
+
+    /* Ensure chip visibility for optional filters */
+    #payer_nameFilter + .select2-container .select2-selection__rendered .selected-chip,
+    #plan_nameFilter + .select2-container .select2-selection__rendered .selected-chip,
+    #hospital_nameFilter + .select2-container .select2-selection__rendered .selected-chip {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    /* Single select container */
+    .select2-container--bootstrap-5 .select2-selection--single {
+        height: 38px !important;
+        padding: 0.375rem 0.75rem !important;
+        background-color: #fff !important;
+        border: 1px solid #ced4da !important;
+        border-radius: 0.375rem !important;
+    }
+
+    /* Single select selected value */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered {
+        color: #673ab7 !important;
+        font-weight: 500 !important;
+        padding: 0 !important;
+        line-height: 1.5 !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+`;
+document.head.appendChild(chipStyles); 
