@@ -432,17 +432,11 @@ async function setupFilters() {
                         state.filteredData = state.allData;
                         state.currentData = state.allData;
                         
-                        // Ensure region and city are maintained in the UI
+                        // Ensure region and city are maintained in the UI with chips
                         const regionFilter = document.getElementById('regionFilter');
                         const cityFilter = document.getElementById('cityFilter');
-                        
-                        if (regionFilter && state.filters.region) {
-                            $(regionFilter).val(state.filters.region).trigger('change');
-                        }
-                        
-                        if (cityFilter && state.filters.city) {
-                            $(cityFilter).val(state.filters.city).trigger('change');
-                        }
+                        ensureOptionAndSetValue($(regionFilter), state.filters.region);
+                        ensureOptionAndSetValue($(cityFilter), state.filters.city);
                         
                         console.log('Updated state with data:', {
                             allDataCount: state.allData.length,
@@ -1052,11 +1046,11 @@ async function updateDependentFilters(changedFilter) {
                     state.filters.region = codeData.region;
                     state.filters.city = codeData.city;
                     
-                    // Update the UI to reflect these values
+                    // Update the UI to reflect these values with chips
                     const regionFilter = document.getElementById('regionFilter');
                     const cityFilter = document.getElementById('cityFilter');
-                    if (regionFilter) $(regionFilter).val(codeData.region).trigger('change');
-                    if (cityFilter) $(cityFilter).val(codeData.city).trigger('change');
+                    ensureOptionAndSetValue($(regionFilter), codeData.region);
+                    ensureOptionAndSetValue($(cityFilter), codeData.city);
                 }
             }
         }
@@ -1270,17 +1264,11 @@ function setupEventListeners() {
                         // Update dependent filters
                         await updateDependentFilters('code');
                         
-                        // Ensure region and city are maintained in the UI
+                        // Ensure region and city are maintained in the UI with chips
                         const regionFilter = document.getElementById('regionFilter');
                         const cityFilter = document.getElementById('cityFilter');
-                        
-                        if (regionFilter && state.filters.region) {
-                            $(regionFilter).val(state.filters.region).trigger('change');
-                        }
-                        
-                        if (cityFilter && state.filters.city) {
-                            $(cityFilter).val(state.filters.city).trigger('change');
-                        }
+                        ensureOptionAndSetValue($(regionFilter), state.filters.region);
+                        ensureOptionAndSetValue($(cityFilter), state.filters.city);
                         
                         updateTable();
                     }
@@ -1754,4 +1742,13 @@ tableStyles.textContent = `
         overflow: hidden;
     }
 `;
-document.head.appendChild(tableStyles); 
+document.head.appendChild(tableStyles);
+
+// Helper to ensure Select2 option exists and set value
+function ensureOptionAndSetValue($select, value) {
+    if (!$select.length || !value) return;
+    if ($select.find(`option[value='${value}']`).length === 0) {
+        $select.append(new Option(value, value, true, true));
+    }
+    $select.val(value).trigger('change');
+} 
