@@ -208,7 +208,6 @@ def get_report():
             city_param = request.args.get('city')
             code = request.args.get('code')
             payer_name = request.args.get('payer_name')
-            plan_name = request.args.get('plan_name')
 
             # Support multiple cities
             cities = [c.strip() for c in city_param.split(',')] if city_param else []
@@ -229,7 +228,7 @@ def get_report():
             ]
             base_params = [region] + cities + [code]
 
-            # Get unique payer names and plan names first
+            # Get unique payer names for the selected filters
             unique_payers_query = f"""
                 SELECT DISTINCT payer_name
                 FROM public.hospital_dataset
@@ -238,15 +237,6 @@ def get_report():
             """
             cur.execute(unique_payers_query, base_params)
             unique_payers = [row['payer_name'] for row in cur.fetchall()]
-
-            unique_plans_query = f"""
-                SELECT DISTINCT plan_name
-                FROM public.hospital_dataset
-                WHERE {' AND '.join(base_conditions)}
-                ORDER BY plan_name
-            """
-            cur.execute(unique_plans_query, base_params)
-            unique_plans = [row['plan_name'] for row in cur.fetchall()]
 
             # Build final WHERE clause with all filters
             conditions = base_conditions.copy()
@@ -257,60 +247,41 @@ def get_report():
                 conditions.append("payer_name = %s")
                 params.append(payer_name)
 
-            # Add plan name filter if provided
-            if plan_name:
-                conditions.append("plan_name = %s")
-                params.append(plan_name)
-
             where_clause = " AND ".join(conditions)
 
-            # Get total count
-            count_query = f"""
-                SELECT COUNT(*) as count
+            # Get data with all relevant fields
+            data_query = f"""
+                SELECT 
+                    id,
+                    hospital_name,
+                    hospital_address,
+                    code,
+                    description,
+                    city,
+                    region,
+                    payer_name,
+                    plan_name,
+                    standard_charge_min,
+                    standard_charge_max,
+                    standard_charge_gross,
+                    standard_charge_negotiated_dollar
                 FROM public.hospital_dataset
                 WHERE {where_clause}
+                ORDER BY 
+                    hospital_name,
+                    payer_name,
+                    plan_name
             """
-            cur.execute(count_query, params)
-            total_count = cur.fetchone()['count']
-
-            # Get data with all relevant fields
-            if total_count > 0:
-                data_query = f"""
-                    SELECT 
-                        id,
-                        hospital_name,
-                        hospital_address,
-                        code,
-                        description,
-                        city,
-                        region,
-                        payer_name,
-                        plan_name,
-                        standard_charge_min,
-                        standard_charge_max,
-                        standard_charge_gross,
-                        standard_charge_negotiated_dollar
-                    FROM public.hospital_dataset
-                    WHERE {where_clause}
-                    ORDER BY 
-                        hospital_name,
-                        payer_name,
-                        plan_name
-                """
-                cur.execute(data_query, params)
-                results = cur.fetchall()
-            else:
-                results = []
+            cur.execute(data_query, params)
+            results = cur.fetchall()
 
             duration = time.time() - start_time
-            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows")
+            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows for region={region}, cities={cities}, code={code}, payer_name={payer_name}")
             
             return jsonify({
                 'status': 'success',
                 'data': results,
-                'total': total_count,
-                'unique_payers': unique_payers,
-                'unique_plans': unique_plans
+                'unique_payers': unique_payers
             })
 
     except Exception as e:
