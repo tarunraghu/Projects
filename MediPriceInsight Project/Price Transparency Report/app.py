@@ -211,8 +211,11 @@ def get_report():
             plan_name = request.args.get('plan_name')
             hospital_name = request.args.get('hospital_name')
 
-            # Support multiple cities
+            # Support multiple values for city, payer_name, plan_name, and hospital_name
             cities = [c.strip() for c in city_param.split(',')] if city_param else []
+            payer_names = [p.strip() for p in payer_name.split(',')] if payer_name else []
+            plan_names = [p.strip() for p in plan_name.split(',')] if plan_name else []
+            hospital_names = [h.strip() for h in hospital_name.split(',')] if hospital_name else []
 
             # Validate required parameters
             if not region or not cities or not code:
@@ -247,15 +250,15 @@ def get_report():
             params = base_params.copy()
 
             # Add optional filters if provided
-            if payer_name:
-                conditions.append("payer_name = %s")
-                params.append(payer_name)
-            if plan_name:
-                conditions.append("plan_name = %s")
-                params.append(plan_name)
-            if hospital_name:
-                conditions.append("hospital_name = %s")
-                params.append(hospital_name)
+            if payer_names:
+                conditions.append(f"payer_name IN ({', '.join(['%s'] * len(payer_names))})")
+                params.extend(payer_names)
+            if plan_names:
+                conditions.append(f"plan_name IN ({', '.join(['%s'] * len(plan_names))})")
+                params.extend(plan_names)
+            if hospital_names:
+                conditions.append(f"hospital_name IN ({', '.join(['%s'] * len(hospital_names))})")
+                params.extend(hospital_names)
 
             where_clause = " AND ".join(conditions)
 
@@ -288,12 +291,12 @@ def get_report():
             duration = time.time() - start_time
             # Log parameters that are actually provided
             log_params = f"region={region}, cities={cities}, code={code}"
-            if payer_name:
-                log_params += f", payer_name={payer_name}"
-            if plan_name:
-                log_params += f", plan_name={plan_name}"
-            if hospital_name:
-                log_params += f", hospital_name={hospital_name}"
+            if payer_names:
+                log_params += f", payer_names={payer_names}"
+            if plan_names:
+                log_params += f", plan_names={plan_names}"
+            if hospital_names:
+                log_params += f", hospital_names={hospital_names}"
             logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows for {log_params}")
             
             return jsonify({

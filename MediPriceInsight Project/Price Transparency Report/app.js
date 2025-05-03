@@ -42,6 +42,7 @@ const EXCLUDED_FILTERS = [
 
 const FILTER_ORDER = ['region', 'city', 'code', 'payer_name', 'plan_name', 'hospital_name'];
 const MANDATORY_FILTERS = ['region', 'city', 'code'];
+const MULTI_SELECT_FILTERS = ['city', 'payer_name', 'plan_name', 'hospital_name'];
 const DEBOUNCE_DELAY = 300;
 
 // State management
@@ -184,13 +185,60 @@ function createFilterElement(column, isMandatory) {
 // Initialize Select2 for a filter
 function initializeSelect2(filter, placeholder) {
     console.log(`Initializing Select2 for ${filter.id} with placeholder: ${placeholder}`);
+    const isMultiSelect = MULTI_SELECT_FILTERS.includes(filter.id.replace('Filter', ''));
+    
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
         placeholder: placeholder,
         allowClear: true,
-        data: []
+        multiple: isMultiSelect,
+        closeOnSelect: !isMultiSelect,
+        templateResult: function(data) {
+            if (!data.id) return data.text;
+            return $('<span>').text(data.text);
+        },
+        templateSelection: function(data) {
+            if (!data.id) return data.text;
+            return $('<span class="selected-chip">').text(data.text);
+        }
     });
+
+    // Add custom styles for chips
+    const style = document.createElement('style');
+    style.textContent = `
+        .selected-chip {
+            background-color: #673ab7;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin: 2px;
+            display: inline-block;
+        }
+        
+        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice {
+            background-color: #673ab7;
+            color: white;
+            border: none;
+            padding: 2px 8px;
+            margin: 2px;
+            border-radius: 4px;
+        }
+        
+        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove {
+            color: white;
+            margin-left: 8px;
+            border: none;
+            background: transparent;
+            padding: 0 4px;
+        }
+        
+        .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+    `;
+    document.head.appendChild(style);
 }
 
 // Setup event listeners for filters
@@ -225,6 +273,12 @@ async function handleFilterChange(changedFilter) {
         
         const { region, city, code, payer_name, plan_name, hospital_name } = state.filters;
         
+        // Convert arrays to comma-separated strings for API calls
+        const cityParam = Array.isArray(city) ? city.join(',') : city;
+        const payerNameParam = Array.isArray(payer_name) ? payer_name.join(',') : payer_name;
+        const planNameParam = Array.isArray(plan_name) ? plan_name.join(',') : plan_name;
+        const hospitalNameParam = Array.isArray(hospital_name) ? hospital_name.join(',') : hospital_name;
+        
         switch (changedFilter) {
             case 'region':
                 if (region) {
@@ -232,30 +286,30 @@ async function handleFilterChange(changedFilter) {
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const cities = await response.json();
                     updateCityFilter(cities);
-                    state.filters.city = null;
+                    state.filters.city = [];
                     state.filters.code = null;
-                    state.filters.payer_name = null;
-                    state.filters.plan_name = null;
-                    state.filters.hospital_name = null;
+                    state.filters.payer_name = [];
+                    state.filters.plan_name = [];
+                    state.filters.hospital_name = [];
                 }
                 break;
                 
             case 'city':
                 if (region && city) {
-                    const response = await fetch(`/api/report/codes?region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}`);
+                    const response = await fetch(`/api/report/codes?region=${encodeURIComponent(region)}&city=${encodeURIComponent(cityParam)}`);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const data = await response.json();
                     updateCodeFilter(data.data || []);
                     state.filters.code = null;
-                    state.filters.payer_name = null;
-                    state.filters.plan_name = null;
-                    state.filters.hospital_name = null;
+                    state.filters.payer_name = [];
+                    state.filters.plan_name = [];
+                    state.filters.hospital_name = [];
                 }
                 break;
                 
             case 'code':
                 if (region && city && code) {
-                    const url = `/api/report?region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}&code=${encodeURIComponent(code)}`;
+                    const url = `/api/report?region=${encodeURIComponent(region)}&city=${encodeURIComponent(cityParam)}&code=${encodeURIComponent(code)}`;
                     console.log('Fetching data from:', url);
                     
                     const response = await fetch(url);
@@ -275,9 +329,9 @@ async function handleFilterChange(changedFilter) {
                     updateOptionalFilter('plan_name', uniquePlans);
                     updateOptionalFilter('hospital_name', uniqueHospitals);
                     
-                    state.filters.payer_name = null;
-                    state.filters.plan_name = null;
-                    state.filters.hospital_name = null;
+                    state.filters.payer_name = [];
+                    state.filters.plan_name = [];
+                    state.filters.hospital_name = [];
                     
                     updateTable();
                 }
@@ -291,14 +345,14 @@ async function handleFilterChange(changedFilter) {
                     let filteredData = state.allData;
                     
                     // Apply all optional filters
-                    if (payer_name) {
-                        filteredData = filteredData.filter(item => item.payer_name === payer_name);
+                    if (payer_name && payer_name.length > 0) {
+                        filteredData = filteredData.filter(item => payer_name.includes(item.payer_name));
                     }
-                    if (plan_name) {
-                        filteredData = filteredData.filter(item => item.plan_name === plan_name);
+                    if (plan_name && plan_name.length > 0) {
+                        filteredData = filteredData.filter(item => plan_name.includes(item.plan_name));
                     }
-                    if (hospital_name) {
-                        filteredData = filteredData.filter(item => item.hospital_name === hospital_name);
+                    if (hospital_name && hospital_name.length > 0) {
+                        filteredData = filteredData.filter(item => hospital_name.includes(item.hospital_name));
                     }
                     
                     state.filteredData = filteredData;
@@ -376,7 +430,7 @@ function updateOptionalFilter(filterName, values) {
     $(filter).empty();
 
     // Add placeholder option
-    const placeholderOption = new Option(`Select ${formatColumnName(filterName)} (Optional)...`, '', true, true);
+    const placeholderOption = new Option(`Select ${formatColumnName(filterName)}...`, '', true, true);
     $(filter).append(placeholderOption);
 
     // Add options
@@ -388,24 +442,46 @@ function updateOptionalFilter(filterName, values) {
     });
 
     // Initialize Select2 with proper configuration
+    const isMultiSelect = MULTI_SELECT_FILTERS.includes(filterName);
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
-        placeholder: `Select ${formatColumnName(filterName)} (Optional)...`,
+        placeholder: `Select ${formatColumnName(filterName)}...`,
         allowClear: true,
-        multiple: false
+        multiple: isMultiSelect,
+        closeOnSelect: !isMultiSelect,
+        templateResult: function(data) {
+            if (!data.id) return data.text;
+            return $('<span>').text(data.text);
+        },
+        templateSelection: function(data) {
+            if (!data.id) return data.text;
+            return $('<span class="selected-chip">').text(data.text);
+        }
     });
 
     // Add event listeners
-    $(filter).off('select2:select select2:clear').on({
+    $(filter).off('select2:select select2:clear select2:unselect').on({
         'select2:select': function(e) {
             console.log(`${filterName} selected:`, e.params.data.id);
-            state.filters[filterName] = e.params.data.id;
+            if (isMultiSelect) {
+                const currentValues = state.filters[filterName] || [];
+                state.filters[filterName] = [...currentValues, e.params.data.id];
+            } else {
+                state.filters[filterName] = e.params.data.id;
+            }
             handleFilterChange(filterName);
+        },
+        'select2:unselect': function(e) {
+            if (isMultiSelect) {
+                const currentValues = state.filters[filterName] || [];
+                state.filters[filterName] = currentValues.filter(v => v !== e.params.data.id);
+                handleFilterChange(filterName);
+            }
         },
         'select2:clear': function() {
             console.log(`${filterName} cleared`);
-            state.filters[filterName] = null;
+            state.filters[filterName] = isMultiSelect ? [] : null;
             handleFilterChange(filterName);
         }
     });
