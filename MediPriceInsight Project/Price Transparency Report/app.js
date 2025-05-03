@@ -1672,4 +1672,39 @@ function updatePayerNameDropdown() {
             }
         });
     }
-} 
+}
+
+// Add Reset All Filters button above the filters
+const resetButton = document.createElement('button');
+resetButton.textContent = 'Reset All Filters';
+resetButton.className = 'btn btn-secondary mb-3';
+resetButton.style.marginRight = '10px';
+resetButton.onclick = function() {
+    // Reset all filter values in state
+    state.filters = {
+        region: null,
+        city: null,
+        code: null,
+        payer_name: [],
+        plan_name: []
+    };
+    // Reset Select2 dropdowns
+    ['region', 'city', 'code', 'payer_name', 'plan_name'].forEach(key => {
+        const filter = document.getElementById(`${key}Filter`);
+        if (filter && $(filter).hasClass('select2-hidden-accessible')) {
+            $(filter).val(null).trigger('change');
+        }
+    });
+    // Reset data
+    state.allData = [];
+    state.filteredData = [];
+    state.currentData = [];
+    // Update table
+    reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a region to view data</td></tr>';
+    // Optionally, reset pagination
+    state.currentPage = 1;
+    state.totalPages = 1;
+    updatePagination();
+};
+// Insert the button above the filter container
+filterContainer.parentNode.insertBefore(resetButton, filterContainer); 
