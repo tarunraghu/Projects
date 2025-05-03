@@ -245,14 +245,14 @@ def create_hospital_address_table():
             last_updated_on VARCHAR(50),
             version VARCHAR(50),
             hospital_location VARCHAR(255),
-            hospital_address VARCHAR(255)
+            hospital_address VARCHAR(255),
+            region VARCHAR(255),
+            city VARCHAR(255)
         );
         """
         
         cur.execute(create_table_query)
         conn.commit()
-        
-        logger.info("Successfully ensured hospital_address table exists")
         
     except Exception as e:
         logger.error(f"Error creating hospital_address table: {str(e)}")
@@ -261,8 +261,7 @@ def create_hospital_address_table():
     finally:
         if cur:
             cur.close()
-        if conn:
-            return_db_connection(conn)
+        return_db_connection(conn)
 
 def create_hospital_charges_table():
     """Create the hospital_charges table with standardized schema"""
@@ -1664,6 +1663,18 @@ def load_address_data_route():
                 'error': 'No address data found in session'
             }), 400
             
+        # Get region and city from request
+        request_data = request.get_json()
+        if not request_data or 'region' not in request_data or 'city' not in request_data:
+            return jsonify({
+                'success': False,
+                'error': 'Region and city are required fields'
+            }), 400
+            
+        # Add region and city to address data
+        address_data['region'] = request_data['region']
+        address_data['city'] = request_data['city']
+            
         logger.info(f"Loading address data: {address_data}")
         
         # Create hospital_address table if it doesn't exist
@@ -1746,7 +1757,7 @@ def process_chunks(df, chunk_size=50000, task=None):
             try:
                 cur = conn.cursor()
                 
-                # Insert data from temporary table to main table, ignoring duplicates
+                # Insert data from temporary table to main table, updating on conflict
                 cur.execute(f"""
                     INSERT INTO hospital_charges (
                         hospital_name, description, code, code_type, payer_name, plan_name,
@@ -1761,7 +1772,15 @@ def process_chunks(df, chunk_size=50000, task=None):
                         standard_charge_max, estimated_amount, TRUE
                     FROM {temp_table}
                     ON CONFLICT (hospital_name, description, code, code_type, payer_name, plan_name)
-                    DO NOTHING;
+                    DO UPDATE SET
+                        standard_charge_gross = EXCLUDED.standard_charge_gross,
+                        standard_charge_discounted_cash = EXCLUDED.standard_charge_discounted_cash,
+                        standard_charge_negotiated_dollar = EXCLUDED.standard_charge_negotiated_dollar,
+                        standard_charge_min = EXCLUDED.standard_charge_min,
+                        standard_charge_max = EXCLUDED.standard_charge_max,
+                        estimated_amount = EXCLUDED.estimated_amount,
+                        is_active = TRUE,
+                        updated_at = CURRENT_TIMESTAMP;
                 """)
                 
                 conn.commit()
@@ -1781,10 +1800,10 @@ def process_chunks(df, chunk_size=50000, task=None):
                 task.progress = progress
                 task.message = f'Processing data: {progress}% complete ({i+1}/{num_chunks} chunks)'
             
-            logger.info(f"Successfully inserted chunk {i+1}/{num_chunks} ({end_idx-start_idx+1} records)")
+            logger.info(f"Successfully processed chunk {i+1}/{num_chunks} ({end_idx-start_idx+1} records)")
             
         except Exception as e:
-            logger.error(f"Error inserting chunk {i+1}: {str(e)}")
+            logger.error(f"Error processing chunk {i+1}: {str(e)}")
             raise
 
 def process_hospital_charges(data_file, hospital_name, task_id, user_name='system', ingestion_type='unknown', chunk_size=50000):

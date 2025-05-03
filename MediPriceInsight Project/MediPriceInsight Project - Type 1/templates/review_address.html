@@ -368,6 +368,8 @@
                 <p><strong>Version:</strong> {{ address_data.version }}</p>
                 <p><strong>Location:</strong> {{ address_data.hospital_location }}</p>
                 <p><strong>Address:</strong> {{ address_data.hospital_address }}</p>
+                <p><strong>Region:</strong> <input type="text" id="region" name="region" required placeholder="Enter region" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;"></p>
+                <p><strong>City:</strong> <input type="text" id="city" name="city" required placeholder="Enter city" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;"></p>
             </div>
         </div>
 
@@ -481,11 +483,26 @@
                 showError(null); // Clear any existing error
                 showSuccess(null); // Clear any existing success message
                 
+                // Get region and city values
+                const region = document.getElementById('region').value.trim();
+                const city = document.getElementById('city').value.trim();
+                
+                // Validate required fields
+                if (!region || !city) {
+                    showError('Please fill in both region and city fields');
+                    hideSpinner();
+                    return;
+                }
+                
                 const response = await fetch('/load-address-data', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify({
+                        region: region,
+                        city: city
+                    })
                 });
                 
                 const result = await response.json();
