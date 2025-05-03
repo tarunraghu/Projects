@@ -204,6 +204,10 @@ async function setupFilters() {
                             // Clear existing options
                             $(cityFilter).empty();
                             
+                            // Add placeholder option
+                            const placeholderOption = new Option('Select City...', '', true, true);
+                            $(cityFilter).append(placeholderOption);
+                            
                             // Add city options
                             cities.forEach(city => {
                                 const option = new Option(city, city);
@@ -216,11 +220,7 @@ async function setupFilters() {
                                     theme: 'bootstrap-5',
                                     width: '100%',
                                     placeholder: 'Select City...',
-                                    allowClear: true,
-                                    data: cities.map(city => ({
-                                        id: city,
-                                        text: city
-                                    }))
+                                    allowClear: true
                                 });
                             } else {
                                 // Just trigger change to update the UI
@@ -389,25 +389,153 @@ async function setupFilters() {
         // Add event listener for code selection
         const codeFilter = document.getElementById('codeFilter');
         if (codeFilter) {
-            $(codeFilter).on('select2:select select2:clear', async (e) => {
-                state.filters[column] = e.type === 'select2:clear' ? '' : e.params?.data?.id || '';
-                
-                if (e.type === 'select2:clear') {
-                    // Clear everything
-                    state.currentData = [];
-                    state.filteredData = [];
-                    state.allData = [];
-                    reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
-                    resetDependentFilters(['region', 'city', 'payer_name', 'plan_name']);
-                } else {
-                    // Fetch all data for the selected code
-                    await fetchData(1, true);
-                    
-                    // Only reset dependent filters that should be reset
-                    resetDependentFilters(['payer_name', 'plan_name']);
-                    
-                    updateTable();
+            $(codeFilter).on('select2:select', async function(e) {
+                const selectedCode = e.params.data.id;
+                if (selectedCode) {
+                    try {
+                        showLoading();
+                        console.log('Code selected:', selectedCode);
+                        
+                        // Fetch data for the selected code
+                        const response = await fetch(`${API_ENDPOINT}/report?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(state.filters.city)}&code=${encodeURIComponent(selectedCode)}`);
+                        console.log('API Response status:', response.status);
+                        
+                        if (!response.ok) {
+                            console.error('Failed to fetch data:', response.status, response.statusText);
+                            showError('Failed to fetch data');
+                            return;
+                        }
+                        
+                        const data = await response.json();
+                        console.log('Raw API response:', data);
+                        
+                        if (!data || !data.data) {
+                            console.error('Invalid data received:', data);
+                            showError('Invalid data received from server');
+                            return;
+                        }
+                        
+                        // Update state
+                        state.filters.code = selectedCode;
+                        state.allData = data.data || [];
+                        state.filteredData = state.allData;
+                        state.currentData = state.allData;
+                        
+                        console.log('Updated state with data:', {
+                            allDataCount: state.allData.length,
+                            filteredDataCount: state.filteredData.length,
+                            currentDataCount: state.currentData.length
+                        });
+                        
+                        // Extract unique payer names for the selected region, city, and code
+                        const uniquePayerNames = [...new Set(state.allData
+                            .filter(item => 
+                                (!state.filters.region || item.region === state.filters.region) && 
+                                (!state.filters.city || item.city === state.filters.city) && 
+                                item.code === selectedCode
+                            )
+                            .map(item => String(item.payer_name))
+                        )].filter(Boolean).sort();
+                        
+                        console.log('Extracted unique payer names:', uniquePayerNames);
+                        
+                        // Update payer name filter
+                        const payerNameFilter = document.getElementById('payer_nameFilter');
+                        console.log('Payer name filter element:', payerNameFilter);
+                        
+                        if (payerNameFilter) {
+                            console.log('Current payer name filter HTML:', payerNameFilter.outerHTML);
+                            
+                            // Clear existing options
+                            $(payerNameFilter).empty();
+                            console.log('Cleared existing options');
+                            
+                            // Add placeholder option
+                            const placeholderOption = new Option('Select Payer Name...', '', true, true);
+                            $(payerNameFilter).append(placeholderOption);
+                            console.log('Added placeholder option');
+                            
+                            // Add payer name options
+                            console.log('Adding payer name options:', uniquePayerNames);
+                            uniquePayerNames.forEach(payerName => {
+                                const option = new Option(payerName, payerName);
+                                $(payerNameFilter).append(option);
+                            });
+                            
+                            console.log('Current options in select:', Array.from(payerNameFilter.options).map(opt => opt.value));
+                            
+                            // Destroy existing Select2 instance if it exists
+                            if ($(payerNameFilter).hasClass('select2-hidden-accessible')) {
+                                console.log('Destroying existing Select2 instance');
+                                $(payerNameFilter).select2('destroy');
+                            }
+                            
+                            // Initialize Select2 with minimal configuration
+                            console.log('Initializing Select2 with options:', {
+                                theme: 'bootstrap-5',
+                                width: '100%',
+                                placeholder: 'Select Payer Name...',
+                                allowClear: true,
+                                multiple: true
+                            });
+                            
+                            $(payerNameFilter).select2({
+                                theme: 'bootstrap-5',
+                                width: '100%',
+                                placeholder: 'Select Payer Name...',
+                                allowClear: true,
+                                multiple: true
+                            });
+                            
+                            // Force update the dropdown
+                            console.log('Triggering change event');
+                            $(payerNameFilter).trigger('change');
+                            
+                            // Verify Select2 initialization
+                            console.log('Select2 initialized:', $(payerNameFilter).hasClass('select2-hidden-accessible'));
+                            console.log('Current Select2 data:', $(payerNameFilter).select2('data'));
+                        } else {
+                            console.error('Payer name filter element not found in DOM');
+                            console.log('Available filter elements:', Array.from(document.querySelectorAll('select')).map(el => el.id));
+                        }
+                        
+                        // Reset plan name filter
+                        resetDependentFilters(['plan_name']);
+                        
+                        // Update table with the data
+                        updateTable();
+                        
+                        console.log('Table updated with data');
+                    } catch (error) {
+                        console.error('Error fetching data:', error);
+                        showError('Failed to load data for the selected code');
+                    } finally {
+                        hideLoading();
+                    }
                 }
+            });
+
+            // Handle clear event
+            $(codeFilter).on('select2:clear', function() {
+                console.log('Code cleared');
+                // Reset data and dependent filters
+                state.allData = [];
+                state.filteredData = [];
+                state.currentData = [];
+                state.filters.code = null;
+                state.filters.payer_name = [];
+                state.filters.plan_name = [];
+                
+                // Reset dependent filter values
+                ['payer_name', 'plan_name'].forEach(key => {
+                    const filter = $(`#${key}Filter`);
+                    if (filter.length) {
+                        filter.val(null).trigger('change');
+                    }
+                });
+                
+                // Update table
+                reportTableBody.innerHTML = '<tr><td colspan="100%" class="text-center">Please select a code to view data</td></tr>';
             });
         }
 
@@ -548,31 +676,15 @@ async function fetchData(page = 1, isInitialLoad = false) {
         if (isInitialLoad) {
             // On initial load, fetch all data for the selected code
             const params = new URLSearchParams();
-            params.append('region', state.filters.region);
-            params.append('city', state.filters.city);
             params.append('code', state.filters.code);
             
-            const response = await fetch(`${API_ENDPOINT}/report?${params}`);
+            const response = await fetch(`${API_ENDPOINT}/report/codes?${params}`);
             
             if (!response.ok) throw new Error('Failed to fetch data');
             const result = await response.json();
-            
-            if (!result || !result.data) {
-                throw new Error('Invalid data received from server');
-            }
-            
             state.allData = result.data;
-            state.filteredData = result.data;
-            state.currentData = result.data;
-            
             console.log('Fetched data count:', state.allData.length);
-            
-            // Update payer_name and plan_name filters based on the fetched data
-            const uniquePayerNames = [...new Set(result.data.map(item => String(item.payer_name)))].filter(Boolean).sort();
-            updateFilterOptions('payer_name', uniquePayerNames);
-            
-            const uniquePlanNames = [...new Set(result.data.map(item => String(item.plan_name)))].filter(Boolean).sort();
-            updateFilterOptions('plan_name', uniquePlanNames);
+            applyFilters();
         }
         
         state.lastFetchTime = now;
@@ -1144,8 +1256,12 @@ function setupEventListeners() {
                         // Fetch all data for the selected code
                         await fetchData(1, true);
                         
-                        // Only reset dependent filters that should be reset
-                        resetDependentFilters(['payer_name', 'plan_name']);
+                        // Update region options based on the selected code
+                        const uniqueRegions = [...new Set(state.allData.map(item => String(item.region)))].filter(Boolean).sort();
+                        updateFilterOptions('region', uniqueRegions);
+                        
+                        // Reset other dependent filters
+                        resetDependentFilters(['city', 'payer_name', 'plan_name']);
                         
                         updateTable();
                     }
@@ -1409,10 +1525,7 @@ function applyFilters() {
         if (column === 'code') {
             filtered = filtered.filter(item => item.code === value);
         } else if (Array.isArray(value)) {
-            filtered = filtered.filter(item => {
-                const itemValue = String(item[column]);
-                return value.some(selectedValue => selectedValue === itemValue);
-            });
+            filtered = filtered.filter(item => value.includes(String(item[column])));
         }
     });
     
