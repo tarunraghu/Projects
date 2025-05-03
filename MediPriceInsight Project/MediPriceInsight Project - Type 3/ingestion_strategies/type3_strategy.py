@@ -320,82 +320,122 @@ class Type3IngestionStrategy(BaseIngestionStrategy):
 
                     # Process each standard charge entry
                     for std_charge in standard_charges:
-                        flat_charge = base_charge.copy()  # Create a copy of base charge with the code info
-                        
-                        # Only try to get payer info if payers_information exists
-                        if std_charge.get('payers_information'):
-                            payers_info = std_charge['payers_information']
-                            # Handle both single dict and list of dicts
-                            if isinstance(payers_info, list) and payers_info:
-                                payer = payers_info[0]  # Take first payer if it's a list
-                            else:
-                                payer = payers_info
-                            
-                            if isinstance(payer, dict):
-                                flat_charge['payer_name'] = str(payer.get('payer_name', ''))
-                                flat_charge['plan_name'] = str(payer.get('plan_name', ''))
-                        
-                        # Process standard charges
-                        charge_type = std_charge.get('type', '')
-                        amount = std_charge.get('amount')
-
-                        # Check for direct gross_charge field
-                        gross_charge = std_charge.get('gross_charge')
-                        if gross_charge is not None:
+                        # If payers_information exists and is a list, create a row for each payer
+                        payers_info = std_charge.get('payers_information')
+                        if payers_info and isinstance(payers_info, list) and len(payers_info) > 0:
+                            for payer in payers_info:
+                                flat_charge = base_charge.copy()
+                                if isinstance(payer, dict):
+                                    flat_charge['payer_name'] = str(payer.get('payer_name', ''))
+                                    flat_charge['plan_name'] = str(payer.get('plan_name', ''))
+                                    # Map standard_charge_dollar to standard_charge_negotiated_dollar
+                                    if 'standard_charge_dollar' in payer:
+                                        try:
+                                            flat_charge['standard_charge_negotiated_dollar'] = float(payer['standard_charge_dollar'])
+                                        except (ValueError, TypeError):
+                                            logger.warning(f"Invalid standard_charge_dollar value: {payer['standard_charge_dollar']}")
+                                            flat_charge['standard_charge_negotiated_dollar'] = None
+                                    # Map estimated_amount from payer to output row
+                                    if 'estimated_amount' in payer:
+                                        try:
+                                            flat_charge['estimated_amount'] = float(payer['estimated_amount'])
+                                        except (ValueError, TypeError):
+                                            logger.warning(f"Invalid estimated_amount value: {payer['estimated_amount']}")
+                                            flat_charge['estimated_amount'] = None
+                                charge_type = std_charge.get('type', '')
+                                amount = std_charge.get('amount')
+                                gross_charge = std_charge.get('gross_charge')
+                                if gross_charge is not None:
+                                    try:
+                                        flat_charge['standard_charge_gross'] = float(gross_charge)
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Invalid gross_charge value: {gross_charge}")
+                                        flat_charge['standard_charge_gross'] = None
+                                discounted_cash = std_charge.get('discounted_cash')
+                                if discounted_cash is not None:
+                                    try:
+                                        flat_charge['standard_charge_discounted_cash'] = float(discounted_cash)
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Invalid discounted_cash value: {discounted_cash}")
+                                        flat_charge['standard_charge_discounted_cash'] = None
+                                minimum = std_charge.get('minimum')
+                                if minimum is not None:
+                                    try:
+                                        flat_charge['standard_charge_min'] = float(minimum)
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Invalid minimum value: {minimum}")
+                                        flat_charge['standard_charge_min'] = None
+                                maximum = std_charge.get('maximum')
+                                if maximum is not None:
+                                    try:
+                                        flat_charge['standard_charge_max'] = float(maximum)
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Invalid maximum value: {maximum}")
+                                        flat_charge['standard_charge_max'] = None
+                                try:
+                                    amount = float(amount) if amount is not None else None
+                                except (ValueError, TypeError):
+                                    amount = None
+                                if charge_type == 'gross_charge':
+                                    flat_charge['standard_charge_gross'] = amount
+                                elif charge_type == 'discounted_cash':
+                                    flat_charge['standard_charge_discounted_cash'] = amount
+                                elif charge_type == 'minimum':
+                                    flat_charge['standard_charge_min'] = amount
+                                elif charge_type == 'maximum':
+                                    flat_charge['standard_charge_max'] = amount
+                                logger.info(f"Processed charge - Description: {description}, Gross: {flat_charge['standard_charge_gross']}, Min: {flat_charge['standard_charge_min']}, Max: {flat_charge['standard_charge_max']}, Payer: {flat_charge['payer_name']}, Plan: {flat_charge['plan_name']}")
+                                flattened_charges.append(flat_charge)
+                        else:
+                            # No payers_information or not a list, fallback to previous logic
+                            flat_charge = base_charge.copy()
+                            if payers_info and isinstance(payers_info, dict):
+                                flat_charge['payer_name'] = str(payers_info.get('payer_name', ''))
+                                flat_charge['plan_name'] = str(payers_info.get('plan_name', ''))
+                            charge_type = std_charge.get('type', '')
+                            amount = std_charge.get('amount')
+                            gross_charge = std_charge.get('gross_charge')
+                            if gross_charge is not None:
+                                try:
+                                    flat_charge['standard_charge_gross'] = float(gross_charge)
+                                except (ValueError, TypeError):
+                                    logger.warning(f"Invalid gross_charge value: {gross_charge}")
+                                    flat_charge['standard_charge_gross'] = None
+                            discounted_cash = std_charge.get('discounted_cash')
+                            if discounted_cash is not None:
+                                try:
+                                    flat_charge['standard_charge_discounted_cash'] = float(discounted_cash)
+                                except (ValueError, TypeError):
+                                    logger.warning(f"Invalid discounted_cash value: {discounted_cash}")
+                                    flat_charge['standard_charge_discounted_cash'] = None
+                            minimum = std_charge.get('minimum')
+                            if minimum is not None:
+                                try:
+                                    flat_charge['standard_charge_min'] = float(minimum)
+                                except (ValueError, TypeError):
+                                    logger.warning(f"Invalid minimum value: {minimum}")
+                                    flat_charge['standard_charge_min'] = None
+                            maximum = std_charge.get('maximum')
+                            if maximum is not None:
+                                try:
+                                    flat_charge['standard_charge_max'] = float(maximum)
+                                except (ValueError, TypeError):
+                                    logger.warning(f"Invalid maximum value: {maximum}")
+                                    flat_charge['standard_charge_max'] = None
                             try:
-                                flat_charge['standard_charge_gross'] = float(gross_charge)
+                                amount = float(amount) if amount is not None else None
                             except (ValueError, TypeError):
-                                logger.warning(f"Invalid gross_charge value: {gross_charge}")
-                                flat_charge['standard_charge_gross'] = None
-
-                        # Check for discounted_cash field
-                        discounted_cash = std_charge.get('discounted_cash')
-                        if discounted_cash is not None:
-                            try:
-                                flat_charge['standard_charge_negotiated_dollar'] = float(discounted_cash)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Invalid discounted_cash value: {discounted_cash}")
-                                flat_charge['standard_charge_negotiated_dollar'] = None
-
-                        # Check for direct minimum field
-                        minimum = std_charge.get('minimum')
-                        if minimum is not None:
-                            try:
-                                flat_charge['standard_charge_min'] = float(minimum)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Invalid minimum value: {minimum}")
-                                flat_charge['standard_charge_min'] = None
-
-                        # Check for direct maximum field
-                        maximum = std_charge.get('maximum')
-                        if maximum is not None:
-                            try:
-                                flat_charge['standard_charge_max'] = float(maximum)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Invalid maximum value: {maximum}")
-                                flat_charge['standard_charge_max'] = None
-
-                        # Process other charge types if they exist
-                        try:
-                            amount = float(amount) if amount is not None else None
-                        except (ValueError, TypeError):
-                            amount = None
-                            
-                        if charge_type == 'gross_charge':
-                            flat_charge['standard_charge_gross'] = amount
-                        elif charge_type == 'discounted_cash':
-                            flat_charge['standard_charge_discounted_cash'] = amount
-                        elif charge_type == 'minimum':
-                            flat_charge['standard_charge_min'] = amount
-                        elif charge_type == 'maximum':
-                            flat_charge['standard_charge_max'] = amount
-                        
-                        logger.info(f"Processed charge - Description: {description}, "
-                                  f"Gross: {flat_charge['standard_charge_gross']}, "
-                                  f"Min: {flat_charge['standard_charge_min']}, "
-                                  f"Max: {flat_charge['standard_charge_max']}")
-                        
-                        flattened_charges.append(flat_charge)
+                                amount = None
+                            if charge_type == 'gross_charge':
+                                flat_charge['standard_charge_gross'] = amount
+                            elif charge_type == 'discounted_cash':
+                                flat_charge['standard_charge_discounted_cash'] = amount
+                            elif charge_type == 'minimum':
+                                flat_charge['standard_charge_min'] = amount
+                            elif charge_type == 'maximum':
+                                flat_charge['standard_charge_max'] = amount
+                            logger.info(f"Processed charge - Description: {description}, Gross: {flat_charge['standard_charge_gross']}, Min: {flat_charge['standard_charge_min']}, Max: {flat_charge['standard_charge_max']}, Payer: {flat_charge['payer_name']}, Plan: {flat_charge['plan_name']}")
+                            flattened_charges.append(flat_charge)
             
             if not flattened_charges:
                 logger.warning("No charge data found after processing")
