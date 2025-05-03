@@ -570,7 +570,7 @@ if __name__ == '__main__':
     # Configure server for HTTP/2
     app.run(
         debug=True,
-        port=5000,
+        port=5005,
         threaded=True,
         extra_files=['index.html', 'styles.css', 'app.js']
     ) 
