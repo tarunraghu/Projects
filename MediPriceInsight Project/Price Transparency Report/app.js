@@ -4,6 +4,14 @@ const FILTERS_ENDPOINT = '/api/filters';
 
 // DOM Elements
 const filterContainer = document.getElementById('filterContainer');
+console.log('Filter container:', filterContainer);
+if (!filterContainer) {
+    console.error('Filter container not found!');
+} else {
+    console.log('Filter container HTML:', filterContainer.outerHTML);
+    console.log('Filter container children:', Array.from(filterContainer.children).map(child => child.outerHTML));
+}
+
 const tableHeader = document.getElementById('tableHeader');
 const reportTableBody = document.getElementById('reportTableBody');
 const paginationContainer = document.createElement('div');
@@ -390,6 +398,8 @@ async function setupFilters() {
                         
                         // Fetch data for the selected code
                         const response = await fetch(`${API_ENDPOINT}/report?region=${encodeURIComponent(state.filters.region)}&city=${encodeURIComponent(state.filters.city)}&code=${encodeURIComponent(selectedCode)}`);
+                        console.log('API Response status:', response.status);
+                        
                         if (!response.ok) {
                             console.error('Failed to fetch data:', response.status, response.statusText);
                             showError('Failed to fetch data');
@@ -397,7 +407,7 @@ async function setupFilters() {
                         }
                         
                         const data = await response.json();
-                        console.log('Received data:', data);
+                        console.log('Raw API response:', data);
                         
                         if (!data || !data.data) {
                             console.error('Invalid data received:', data);
@@ -420,8 +430,8 @@ async function setupFilters() {
                         // Extract unique payer names for the selected region, city, and code
                         const uniquePayerNames = [...new Set(state.allData
                             .filter(item => 
-                                item.region === state.filters.region && 
-                                item.city === state.filters.city && 
+                                (!state.filters.region || item.region === state.filters.region) && 
+                                (!state.filters.city || item.city === state.filters.city) && 
                                 item.code === selectedCode
                             )
                             .map(item => String(item.payer_name))
@@ -431,33 +441,62 @@ async function setupFilters() {
                         
                         // Update payer name filter
                         const payerNameFilter = document.getElementById('payer_nameFilter');
+                        console.log('Payer name filter element:', payerNameFilter);
+                        
                         if (payerNameFilter) {
+                            console.log('Current payer name filter HTML:', payerNameFilter.outerHTML);
+                            
                             // Clear existing options
                             $(payerNameFilter).empty();
+                            console.log('Cleared existing options');
                             
                             // Add placeholder option
                             const placeholderOption = new Option('Select Payer Name...', '', true, true);
                             $(payerNameFilter).append(placeholderOption);
+                            console.log('Added placeholder option');
                             
                             // Add payer name options
+                            console.log('Adding payer name options:', uniquePayerNames);
                             uniquePayerNames.forEach(payerName => {
                                 const option = new Option(payerName, payerName);
                                 $(payerNameFilter).append(option);
                             });
                             
-                            // Initialize Select2 if not already initialized
-                            if (!$(payerNameFilter).hasClass('select2-hidden-accessible')) {
-                                $(payerNameFilter).select2({
-                                    theme: 'bootstrap-5',
-                                    width: '100%',
-                                    placeholder: 'Select Payer Name...',
-                                    allowClear: true,
-                                    multiple: true
-                                });
-                            } else {
-                                // Just trigger change to update the UI
-                                $(payerNameFilter).trigger('change');
+                            console.log('Current options in select:', Array.from(payerNameFilter.options).map(opt => opt.value));
+                            
+                            // Destroy existing Select2 instance if it exists
+                            if ($(payerNameFilter).hasClass('select2-hidden-accessible')) {
+                                console.log('Destroying existing Select2 instance');
+                                $(payerNameFilter).select2('destroy');
                             }
+                            
+                            // Initialize Select2 with minimal configuration
+                            console.log('Initializing Select2 with options:', {
+                                theme: 'bootstrap-5',
+                                width: '100%',
+                                placeholder: 'Select Payer Name...',
+                                allowClear: true,
+                                multiple: true
+                            });
+                            
+                            $(payerNameFilter).select2({
+                                theme: 'bootstrap-5',
+                                width: '100%',
+                                placeholder: 'Select Payer Name...',
+                                allowClear: true,
+                                multiple: true
+                            });
+                            
+                            // Force update the dropdown
+                            console.log('Triggering change event');
+                            $(payerNameFilter).trigger('change');
+                            
+                            // Verify Select2 initialization
+                            console.log('Select2 initialized:', $(payerNameFilter).hasClass('select2-hidden-accessible'));
+                            console.log('Current Select2 data:', $(payerNameFilter).select2('data'));
+                        } else {
+                            console.error('Payer name filter element not found in DOM');
+                            console.log('Available filter elements:', Array.from(document.querySelectorAll('select')).map(el => el.id));
                         }
                         
                         // Reset plan name filter
@@ -676,6 +715,7 @@ function setupDynamicFilters(columns) {
 
 // Create a filter element
 function createFilterElement(column, isMandatory) {
+    console.log(`Creating filter element for ${column}`);
     const filterCol = document.createElement('div');
     filterCol.className = 'col-md-4 mb-3 filter-row';
     
@@ -696,6 +736,7 @@ function createFilterElement(column, isMandatory) {
     filterCol.appendChild(select);
 
     filterContainer.appendChild(filterCol);
+    console.log(`Filter element created for ${column}:`, select);
 }
 
 // Populate filters with values
@@ -746,8 +787,12 @@ function populateFilters(filterValues, uniqueCodes) {
 
 // Populate filter options
 function populateFilterOptions(column, values) {
+    console.log(`Populating filter options for ${column}:`, values);
     const filter = document.getElementById(`${column}Filter`);
-    if (!filter) return;
+    if (!filter) {
+        console.error(`Filter element not found for ${column}`);
+        return;
+    }
 
     let options;
     if (column === 'code') {
@@ -776,6 +821,7 @@ function populateFilterOptions(column, values) {
             }))
             .sort((a, b) => a.id.localeCompare(b.id));
     } else {
+        console.log('Processing non-code filter:', column);
         // Count occurrences for other filters
         const valueCounts = values.reduce((counts, value) => {
             if (value !== null && value !== '') {
@@ -800,6 +846,8 @@ function populateFilterOptions(column, values) {
             return counts;
         }, new Map());
 
+        console.log('Value counts for', column, ':', valueCounts);
+
         options = Array.from(valueCounts.entries())
             .map(([value, count]) => ({
                 id: value,
@@ -807,6 +855,8 @@ function populateFilterOptions(column, values) {
                 count: count
             }))
             .sort((a, b) => a.id.localeCompare(b.id));
+        
+        console.log('Generated options for', column, ':', options);
     }
     
     $(filter).empty();
@@ -836,7 +886,9 @@ function populateFilterOptions(column, values) {
             }
         }
     });
-
+    
+    console.log(`Successfully populated ${column} filter with options`);
+    
     // Style the selected items to match the dropdown style
     const style = document.createElement('style');
     style.textContent = `
@@ -957,8 +1009,12 @@ async function updateDependentFilters(changedFilter) {
                 currentData = currentData.filter(item => item.code === selectedCode);
             }
             
+            console.log('Current data for payer name filter:', currentData);
+            
             // Update payer_name options
             const uniquePayerNames = [...new Set(currentData.map(item => String(item.payer_name)))].filter(Boolean).sort();
+            console.log('Unique payer names:', uniquePayerNames);
+            
             updateFilterOptions('payer_name', uniquePayerNames);
             
             // Reset plan_name as it depends on payer_name
@@ -1007,11 +1063,19 @@ async function updateDependentFilters(changedFilter) {
 
 // Helper function to update filter options
 function updateFilterOptions(filterName, values) {
+    console.log(`Updating filter options for ${filterName}:`, values);
     const filter = $(`#${filterName}Filter`);
+    if (!filter.length) {
+        console.error(`Filter element not found for ${filterName}`);
+        return;
+    }
+    
     const currentSelected = filter.val() || [];
+    console.log('Current selected values:', currentSelected);
     
     // Only keep currently selected values that are still valid
     const validSelected = currentSelected.filter(value => values.includes(value));
+    console.log('Valid selected values:', validSelected);
     
     // Update options and selection
     populateFilterOptions(filterName, values);
@@ -1023,6 +1087,7 @@ function updateFilterOptions(filterName, values) {
     
     // Update state
     state.filters[filterName] = validSelected;
+    console.log(`Updated ${filterName} filter state:`, state.filters[filterName]);
 }
 
 // Helper function to reset dependent filters
