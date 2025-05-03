@@ -178,96 +178,10 @@ function createFilterElement(column, isMandatory) {
 function initializeSelect2(filter, placeholder) {
     console.log(`Initializing Select2 for ${filter.id} with placeholder: ${placeholder}`);
     
-    // Remove any existing styles
-    $('style[data-select2-style]').remove();
-    
-    // Add new styles
-    const style = document.createElement('style');
-    style.setAttribute('data-select2-style', 'true');
-    style.textContent = `
-        /* Base Select2 container */
-        .select2-container--bootstrap-5 {
-            width: 100% !important;
-        }
-        
-        /* Single select container */
-        .select2-container--bootstrap-5 .select2-selection--single {
-            height: 38px !important;
-            padding: 0.375rem 0.75rem !important;
-            background-color: #fff !important;
-            border: 1px solid #ced4da !important;
-            border-radius: 0.375rem !important;
-        }
-        
-        /* Single select selected value */
-        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered {
-            color: #673ab7 !important;
-            font-weight: 500 !important;
-            padding: 0 !important;
-            line-height: 1.5 !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-        
-        /* Selected chip for all filters */
-        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
-            background-color: #673ab7 !important;
-            color: white !important;
-            border: none !important;
-            padding: 0.25rem 0.75rem !important;
-            margin: 0 !important;
-            border-radius: 0.25rem !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            gap: 0.5rem !important;
-            font-size: 0.875rem !important;
-            line-height: 1.5 !important;
-            min-height: 28px !important;
-        }
-        
-        /* Focus state */
-        .select2-container--bootstrap-5.select2-container--focus .select2-selection {
-            border-color: #673ab7 !important;
-            box-shadow: 0 0 0 0.2rem rgba(103, 58, 183, 0.25) !important;
-        }
-        
-        /* Dropdown */
-        .select2-container--bootstrap-5 .select2-dropdown {
-            border-color: #673ab7 !important;
-        }
-        
-        /* Highlighted option */
-        .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
-            background-color: #000080 !important;
-            color: white !important;
-        }
-        
-        /* Selected option */
-        .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
-            background-color: #000080 !important;
-            color: white !important;
-        }
-
-        /* Clear button */
-        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear {
-            color: #673ab7 !important;
-            font-size: 1.25rem !important;
-            padding: 0 0.5rem !important;
-        }
-
-        /* Clear button hover */
-        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear:hover {
-            color: #000080 !important;
-        }
-
-        /* Ensure chip visibility for all filters */
-        .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
-            display: inline-flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-        }
-    `;
-    document.head.appendChild(style);
+    // Remove any existing Select2 instance
+    if ($(filter).hasClass('select2-hidden-accessible')) {
+        $(filter).select2('destroy');
+    }
 
     // Initialize Select2 with updated configuration
     $(filter).select2({
@@ -283,9 +197,18 @@ function initializeSelect2(filter, placeholder) {
         },
         templateSelection: function(data) {
             if (!data.id) return data.text;
+            // Add an X button to the chip
             const chip = $('<span class="selected-chip">').text(data.text);
+            const closeBtn = $('<span class="chip-close" style="margin-left:8px;cursor:pointer;font-weight:bold;">×</span>');
+            chip.append(closeBtn);
             return chip;
         }
+    });
+
+    // Add event delegation for chip close
+    $(filter).next('.select2-container').off('click', '.chip-close').on('click', '.chip-close', function(e) {
+        e.stopPropagation();
+        $(filter).val(null).trigger('change');
     });
 }
 
@@ -371,10 +294,6 @@ async function handleFilterChange(changedFilter) {
                     updateOptionalFilter('payer_name', uniquePayers);
                     updateOptionalFilter('plan_name', uniquePlans);
                     updateOptionalFilter('hospital_name', uniqueHospitals);
-                    
-                    state.filters.payer_name = null;
-                    state.filters.plan_name = null;
-                    state.filters.hospital_name = null;
                     
                     updateTable();
                 }
@@ -498,10 +417,18 @@ function updateOptionalFilter(filterName, values) {
         },
         templateSelection: function(data) {
             if (!data.id) return data.text;
+            // Add an X button to the chip
             const chip = $('<span class="selected-chip">').text(data.text);
+            const closeBtn = $('<span class="chip-close" style="margin-left:8px;cursor:pointer;font-weight:bold;">×</span>');
+            chip.append(closeBtn);
             return chip;
         }
     });
+
+    // Set value from state if present
+    if (state.filters[filterName]) {
+        $(filter).val(state.filters[filterName]).trigger('change');
+    }
 
     // Add event listeners
     $(filter).off('select2:select select2:clear').on({
@@ -515,6 +442,12 @@ function updateOptionalFilter(filterName, values) {
             state.filters[filterName] = null;
             handleFilterChange(filterName);
         }
+    });
+
+    // Add event delegation for chip close
+    $(filter).next('.select2-container').off('click', '.chip-close').on('click', '.chip-close', function(e) {
+        e.stopPropagation();
+        $(filter).val(null).trigger('change');
     });
 }
 
@@ -1001,15 +934,6 @@ function updateTable() {
     reportTableBody.innerHTML = '';
     reportTableBody.appendChild(fragment);
     
-    // Update optional filters with current data
-    const uniquePayers = [...new Set(state.currentData.map(item => item.payer_name).filter(Boolean))].sort();
-    const uniquePlans = [...new Set(state.currentData.map(item => item.plan_name).filter(Boolean))].sort();
-    const uniqueHospitals = [...new Set(state.currentData.map(item => item.hospital_name).filter(Boolean))].sort();
-    
-    updateOptionalFilter('payer_name', uniquePayers);
-    updateOptionalFilter('plan_name', uniquePlans);
-    updateOptionalFilter('hospital_name', uniqueHospitals);
-    
     console.timeEnd('updateTable');
 }
 
@@ -1348,104 +1272,101 @@ function applyFilters() {
 // Update Select2 specific styles
 const select2Styles = document.createElement('style');
 select2Styles.textContent = `
-    .select2-container--bootstrap-5 .select2-selection {
-        min-height: 38px;
-        border: 1px solid #ced4da;
+    /* Base Select2 container */
+    .select2-container--bootstrap-5 {
+        width: 100% !important;
     }
     
-    .select2-container--bootstrap-5 .select2-selection--multiple {
-        padding: 2px 8px;
+    /* Single select container */
+    .select2-container--bootstrap-5 .select2-selection--single {
+        height: 38px !important;
+        padding: 0.375rem 0.75rem !important;
+        background-color: #fff !important;
+        border: 1px solid #ced4da !important;
+        border-radius: 0.375rem !important;
     }
     
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice {
-        background-color: #673ab7;
-        color: #ffffff;
-        border: none;
-        padding: 2px 8px;
-        margin: 2px 4px;
-        border-radius: 4px;
-        font-weight: 400;
-        display: flex;
-        align-items: center;
-        gap: 6px;
+    /* Selected value display */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered {
+        color: #673ab7 !important;
+        font-weight: 500 !important;
+        padding: 0 !important;
+        line-height: 1.5 !important;
+        display: flex !important;
+        align-items: center !important;
     }
     
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove {
-        color: #ffffff !important;
-        font-size: 18px;
-        order: 1;
-        padding: 0 4px;
-        border: none;
-        background: transparent;
-        opacity: 1;
-        line-height: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0;
-    }
-
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove:hover {
-        background-color: transparent;
-        color: #e0e0e0 !important;
-        opacity: 0.9;
-    }
-
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__display {
-        color: #ffffff;
-        padding: 0;
-        order: 0;
-        margin: 0;
-    }
-
-    /* Override any default Select2 remove button styles */
-    .select2-selection__choice__remove span,
-    .select2-selection__choice__remove::before,
-    .select2-selection__choice__remove::after {
-        color: #ffffff !important;
-        font-size: 18px !important;
-        font-weight: normal !important;
-    }
-
-    /* Ensure hover states maintain visibility */
-    .select2-selection__choice__remove:hover span,
-    .select2-selection__choice__remove:hover::before,
-    .select2-selection__choice__remove:hover::after {
-        color: #e0e0e0 !important;
-    }
-
-    .select2-container--bootstrap-5 .select2-search__field {
-        margin-top: 0;
-        min-height: 30px;
+    /* Selected chip styling */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
+        background-color: #673ab7 !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.25rem 0.75rem !important;
+        margin: 0 !important;
+        border-radius: 0.25rem !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+        font-size: 0.875rem !important;
+        line-height: 1.5 !important;
+        min-height: 28px !important;
     }
     
-    .select2-container--bootstrap-5 .select2-dropdown {
-        border-color: #ced4da;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    
-    .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
-        background-color: #673ab7;
-        color: #ffffff;
-    }
-    
-    .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
-        background-color: #e9ecef;
-    }
-
+    /* Focus state */
     .select2-container--bootstrap-5.select2-container--focus .select2-selection {
-        border-color: #673ab7;
-        box-shadow: 0 0 0 0.2rem rgba(103, 58, 183, 0.25);
+        border-color: #673ab7 !important;
+        box-shadow: 0 0 0 0.2rem rgba(103, 58, 183, 0.25) !important;
+    }
+    
+    /* Dropdown */
+    .select2-container--bootstrap-5 .select2-dropdown {
+        border-color: #673ab7 !important;
+    }
+    
+    /* Highlighted option */
+    .select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
+        background-color: #000080 !important;
+        color: white !important;
+    }
+    
+    /* Selected option */
+    .select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
+        background-color: #000080 !important;
+        color: white !important;
     }
 
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__rendered {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
+    /* Clear button */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear {
+        color: #673ab7 !important;
+        font-size: 1.25rem !important;
+        padding: 0 0.5rem !important;
     }
 
-    .select2-container--bootstrap-5 .select2-selection--multiple .select2-search__field {
-        margin-left: 4px;
+    /* Clear button hover */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__clear:hover {
+        color: #000080 !important;
+    }
+
+    /* Ensure chip visibility for all filters */
+    .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered .selected-chip {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    /* Force chip display for optional filters */
+    #payer_nameFilter + .select2-container .select2-selection__rendered .selected-chip,
+    #plan_nameFilter + .select2-container .select2-selection__rendered .selected-chip,
+    #hospital_nameFilter + .select2-container .select2-selection__rendered .selected-chip {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        background-color: #673ab7 !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.25rem 0.75rem !important;
+        margin: 0 !important;
+        border-radius: 0.25rem !important;
     }
 `;
 document.head.appendChild(select2Styles);
