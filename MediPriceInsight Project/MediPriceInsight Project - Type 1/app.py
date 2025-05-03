@@ -1718,6 +1718,12 @@ def process_chunks(df, chunk_size=50000, task=None):
     df_with_row_num = df.withColumn("partition_id", spark_partition_id()) \
                         .withColumn("row_num", row_number().over(window_spec))
     
+    # Get the distinct hospital name from the DataFrame
+    hospital_names = df.select("hospital_name").distinct().collect()
+    if len(hospital_names) != 1:
+        raise ValueError(f"Expected exactly one hospital name, but found {len(hospital_names)}")
+    hospital_name = hospital_names[0][0]
+    
     # JDBC connection properties
     jdbc_url = f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
     connection_properties = {
@@ -1729,6 +1735,45 @@ def process_chunks(df, chunk_size=50000, task=None):
         "stringtype": "unspecified"
     }
     
+    # Archive and remove existing records for this hospital before processing chunks
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        # Archive existing records
+        cur.execute("""
+            INSERT INTO hospital_charges_archive (
+                hospital_name, description, code, code_type, 
+                payer_name, plan_name, standard_charge_gross,
+                standard_charge_negotiated_dollar, standard_charge_min,
+                standard_charge_max, standard_charge_discounted_cash,
+                estimated_amount, original_created_at, archive_reason
+            )
+            SELECT 
+                hospital_name, description, code, code_type,
+                payer_name, plan_name, standard_charge_gross,
+                standard_charge_negotiated_dollar, standard_charge_min,
+                standard_charge_max, standard_charge_discounted_cash,
+                estimated_amount, created_at, 'New data ingestion'
+            FROM hospital_charges
+            WHERE hospital_name = %s;
+        """, (hospital_name,))
+        
+        # Delete all records for this hospital
+        cur.execute("""
+            DELETE FROM hospital_charges 
+            WHERE hospital_name = %s;
+        """, (hospital_name,))
+        
+        conn.commit()
+        logger.info(f"Successfully archived and removed existing records for hospital: {hospital_name}")
+        
+    finally:
+        if cur:
+            cur.close()
+        return_db_connection(conn)
+    
+    # Process chunks
     for i in range(num_chunks):
         start_idx = i * chunk_size + 1  # 1-based row numbers
         end_idx = min((i + 1) * chunk_size, total_rows)
@@ -1752,12 +1797,12 @@ def process_chunks(df, chunk_size=50000, task=None):
                     properties=connection_properties
                 )
             
-            # Insert from temporary table to main table with ON CONFLICT handling
+            # Insert from temporary table to main table
             conn = get_db_connection()
             try:
                 cur = conn.cursor()
                 
-                # Insert data from temporary table to main table, updating on conflict
+                # Insert new records
                 cur.execute(f"""
                     INSERT INTO hospital_charges (
                         hospital_name, description, code, code_type, payer_name, plan_name,
@@ -1766,21 +1811,11 @@ def process_chunks(df, chunk_size=50000, task=None):
                         standard_charge_max, estimated_amount, is_active
                     )
                     SELECT 
-                        hospital_name, description, code, code_type, payer_name, plan_name,
-                        standard_charge_gross, standard_charge_discounted_cash,
-                        standard_charge_negotiated_dollar, standard_charge_min,
-                        standard_charge_max, estimated_amount, TRUE
-                    FROM {temp_table}
-                    ON CONFLICT (hospital_name, description, code, code_type, payer_name, plan_name)
-                    DO UPDATE SET
-                        standard_charge_gross = EXCLUDED.standard_charge_gross,
-                        standard_charge_discounted_cash = EXCLUDED.standard_charge_discounted_cash,
-                        standard_charge_negotiated_dollar = EXCLUDED.standard_charge_negotiated_dollar,
-                        standard_charge_min = EXCLUDED.standard_charge_min,
-                        standard_charge_max = EXCLUDED.standard_charge_max,
-                        estimated_amount = EXCLUDED.estimated_amount,
-                        is_active = TRUE,
-                        updated_at = CURRENT_TIMESTAMP;
+                        t.hospital_name, t.description, t.code, t.code_type, t.payer_name, t.plan_name,
+                        t.standard_charge_gross, t.standard_charge_discounted_cash,
+                        t.standard_charge_negotiated_dollar, t.standard_charge_min,
+                        t.standard_charge_max, t.estimated_amount, TRUE
+                    FROM {temp_table} t;
                 """)
                 
                 conn.commit()
@@ -1843,7 +1878,7 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             cur.execute("""
                 SELECT COUNT(*) 
                 FROM hospital_charges 
-                WHERE hospital_name = %s AND is_active = TRUE;
+                WHERE hospital_name = %s;
             """, (hospital_name,))
             
             existing_count = cur.fetchone()[0]
@@ -1913,8 +1948,15 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             task.progress = 50
             task.message = 'Removing duplicate records...'
             
-            # Remove duplicates
+            # Remove duplicates using a more robust approach
             dedup_columns = ['hospital_name', 'description', 'code', 'code_type', 'payer_name', 'plan_name']
+            
+            # First, count duplicates
+            duplicate_count = processed_df.groupBy(dedup_columns).count().filter("count > 1").count()
+            if duplicate_count > 0:
+                logger.warning(f"Found {duplicate_count} duplicate records in the data")
+            
+            # Remove duplicates and keep the first occurrence
             processed_df = processed_df.dropDuplicates(dedup_columns)
             
             # Get unique records count
@@ -2329,7 +2371,7 @@ def log_error():
         }), 500
 
 def archive_hospital_records(hospital_name):
-    """Archive existing records for a hospital"""
+    """Archive existing records for a hospital and remove them from the main table"""
     conn = None
     cur = None
     try:
@@ -2343,7 +2385,7 @@ def archive_hospital_records(hospital_name):
         cur.execute("""
             SELECT COUNT(*) 
             FROM hospital_charges 
-            WHERE hospital_name = %s AND is_active = TRUE;
+            WHERE hospital_name = %s;
         """, (hospital_name,))
         
         count = cur.fetchone()[0]
@@ -2365,31 +2407,29 @@ def archive_hospital_records(hospital_name):
                     standard_charge_max, standard_charge_discounted_cash,
                     estimated_amount, created_at, 'New data ingestion'
                 FROM hospital_charges
-                WHERE hospital_name = %s AND is_active = TRUE;
+                WHERE hospital_name = %s;
             """, (hospital_name,))
             
-            # Mark existing records as inactive
+            # Delete all records for this hospital from the main table
             cur.execute("""
-                UPDATE hospital_charges 
-                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
-                WHERE hospital_name = %s AND is_active = TRUE;
+                DELETE FROM hospital_charges 
+                WHERE hospital_name = %s;
             """, (hospital_name,))
             
             # Commit transaction
             conn.commit()
-            
-            logger.info(f"Successfully archived {count} records for hospital: {hospital_name}")
+            logger.info(f"Successfully archived and removed {count} records for hospital: {hospital_name}")
             return count
         else:
             # Commit transaction even if no records to archive
             conn.commit()
-            logger.info(f"No active records found to archive for hospital: {hospital_name}")
+            logger.info(f"No records found to archive for hospital: {hospital_name}")
             return 0
             
     except Exception as e:
         if conn:
             conn.rollback()
-        logger.error(f"Error archiving hospital records: {str(e)}")
+        logger.error(f"Error archiving records for hospital {hospital_name}: {str(e)}")
         logger.error(traceback.format_exc())
         raise
     finally:
