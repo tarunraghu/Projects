@@ -208,6 +208,8 @@ def get_report():
             city_param = request.args.get('city')
             code = request.args.get('code')
             payer_name = request.args.get('payer_name')
+            plan_name = request.args.get('plan_name')
+            hospital_name = request.args.get('hospital_name')
 
             # Support multiple cities
             cities = [c.strip() for c in city_param.split(',')] if city_param else []
@@ -228,24 +230,32 @@ def get_report():
             ]
             base_params = [region] + cities + [code]
 
-            # Get unique payer names for the selected filters
-            unique_payers_query = f"""
-                SELECT DISTINCT payer_name
+            # Get unique values for optional filters
+            unique_values_query = f"""
+                SELECT 
+                    array_agg(DISTINCT payer_name) as unique_payers,
+                    array_agg(DISTINCT plan_name) as unique_plans,
+                    array_agg(DISTINCT hospital_name) as unique_hospitals
                 FROM public.hospital_dataset
                 WHERE {' AND '.join(base_conditions)}
-                ORDER BY payer_name
             """
-            cur.execute(unique_payers_query, base_params)
-            unique_payers = [row['payer_name'] for row in cur.fetchall()]
+            cur.execute(unique_values_query, base_params)
+            unique_values = cur.fetchone()
 
             # Build final WHERE clause with all filters
             conditions = base_conditions.copy()
             params = base_params.copy()
 
-            # Add payer name filter if provided
+            # Add optional filters if provided
             if payer_name:
                 conditions.append("payer_name = %s")
                 params.append(payer_name)
+            if plan_name:
+                conditions.append("plan_name = %s")
+                params.append(plan_name)
+            if hospital_name:
+                conditions.append("hospital_name = %s")
+                params.append(hospital_name)
 
             where_clause = " AND ".join(conditions)
 
@@ -276,12 +286,22 @@ def get_report():
             results = cur.fetchall()
 
             duration = time.time() - start_time
-            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows for region={region}, cities={cities}, code={code}, payer_name={payer_name}")
+            # Log parameters that are actually provided
+            log_params = f"region={region}, cities={cities}, code={code}"
+            if payer_name:
+                log_params += f", payer_name={payer_name}"
+            if plan_name:
+                log_params += f", plan_name={plan_name}"
+            if hospital_name:
+                log_params += f", hospital_name={hospital_name}"
+            logger.info(f"Data fetched in {duration:.2f}s - {len(results)} rows for {log_params}")
             
             return jsonify({
                 'status': 'success',
                 'data': results,
-                'unique_payers': unique_payers
+                'unique_payers': unique_values['unique_payers'] or [],
+                'unique_plans': unique_values['unique_plans'] or [],
+                'unique_hospitals': unique_values['unique_hospitals'] or []
             })
 
     except Exception as e:
