@@ -38,7 +38,13 @@ class FlaskAppManager:
             {
                 "name": "Data Dump Application",
                 "port": 5004,
-                "directory": os.path.join(self.base_dir, "MediPriceInsight Project - Data Dump"),
+                "directory": os.path.join(self.base_dir, "Request Data Dump"),
+                "pid": None
+            },
+            {
+                "name": "Price Transparency Report",
+                "port": 5005,
+                "directory": os.path.join(self.base_dir, "Price Transparency Report"),
                 "pid": None
             }
         ]

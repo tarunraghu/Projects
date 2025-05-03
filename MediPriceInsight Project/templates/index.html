@@ -8,17 +8,20 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
-            --primary-color: #2c3e50;
-            --secondary-color: #34495e;
-            --accent-color: #3498db;
-            --success-color: #2ecc71;
-            --warning-color: #f1c40f;
-            --danger-color: #e74c3c;
+            --primary-purple: #6a1b9a;
+            --secondary-purple: #9c27b0;
+            --light-purple: #ba68c8;
+            --white: #ffffff;
+            --light-gray: #f5f5f5;
+            --type1-color: #7952b3;
+            --type2-color: #198754;
+            --type3-color: #0d6efd;
             --data-dump-color: #9b59b6;
+            --price-transparency-color: #e67e22;
         }
 
         body {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            background: linear-gradient(135deg, var(--light-purple) 0%, var(--primary-purple) 100%);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -50,7 +53,7 @@
         }
 
         .header h1 {
-            color: var(--primary-color);
+            color: var(--primary-purple);
             font-size: 2.5rem;
             font-weight: 700;
             margin-bottom: 1rem;
@@ -58,70 +61,71 @@
         }
 
         .header p {
-            color: var(--secondary-color);
+            color: var(--secondary-purple);
             font-size: 1.1rem;
             opacity: 0.8;
         }
 
-        .btn-ingestion {
-            margin: 15px 0;
-            padding: 20px 30px;
-            font-size: 1.1rem;
+        .tree-item {
+            margin: 10px 0;
             border-radius: 12px;
-            width: 100%;
-            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        .tree-header {
+            padding: 15px 20px;
+            background-color: var(--primary-purple);
+            color: var(--white);
+            cursor: pointer;
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 10px;
+            justify-content: space-between;
             font-weight: 600;
-            letter-spacing: 0.5px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
         }
 
-        .btn-ingestion:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        .tree-header:hover {
+            background-color: var(--secondary-purple);
         }
 
-        .btn-ingestion i {
-            font-size: 1.2rem;
+        .tree-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background-color: rgba(255, 255, 255, 0.9);
         }
 
-        .type1 { 
-            background-color: #7952b3; 
-            border-color: #7952b3;
-            color: white;
+        .tree-content.active {
+            max-height: 500px;
         }
 
-        .type2 { 
-            background-color: #198754; 
-            border-color: #198754;
-            color: white;
+        .tree-option {
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: var(--primary-purple);
+            transition: all 0.3s ease;
+            border-left: 4px solid transparent;
         }
 
-        .type3 { 
-            background-color: #0d6efd; 
-            border-color: #0d6efd;
-            color: white;
+        .tree-option:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+            border-left-color: var(--primary-purple);
         }
 
-        .type4 { 
-            background-color: var(--data-dump-color); 
-            border-color: var(--data-dump-color);
-            color: white;
-        }
-
-        .btn-ingestion:hover {
-            filter: brightness(110%);
-        }
-
-        .footer {
+        .tree-option i {
+            width: 20px;
             text-align: center;
-            padding: 1rem;
-            color: var(--secondary-color);
-            font-size: 0.9rem;
-            opacity: 0.7;
+        }
+
+        .tree-arrow {
+            transition: transform 0.3s ease;
+        }
+
+        .tree-arrow.active {
+            transform: rotate(90deg);
         }
 
         @media (max-width: 768px) {
@@ -134,9 +138,8 @@
                 font-size: 2rem;
             }
 
-            .btn-ingestion {
-                padding: 15px 20px;
-                font-size: 1rem;
+            .tree-header {
+                padding: 12px 15px;
             }
         }
     </style>
@@ -146,32 +149,70 @@
         <div class="card">
             <div class="header">
                 <h1>MediPriceInsight Data Tool</h1>
-                <p>Select an ingestion method to process your data</p>
+                <p>Select an option to proceed</p>
             </div>
-            <div class="d-grid gap-3">
-                <a href="{{ url_for('type1') }}" class="btn btn-primary btn-ingestion type1">
-                    <i class="fas fa-file-csv"></i>
-                    Type 1 CSV Direct Ingestion
-                </a>
-                <a href="{{ url_for('type2') }}" class="btn btn-primary btn-ingestion type2">
-                    <i class="fas fa-table"></i>
-                    Type 2 CSV Pivot Ingestion
-                </a>
-                <a href="{{ url_for('type3') }}" class="btn btn-primary btn-ingestion type3">
-                    <i class="fas fa-file-code"></i>
-                    Type 3 JSON Direct Ingestion
-                </a>
-                <a href="{{ url_for('data_dump') }}" class="btn btn-primary btn-ingestion type4">
-                    <i class="fas fa-database"></i>
-                    Request Data Dump
-                </a>
+            
+            <div class="tree-structure">
+                <div class="tree-item">
+                    <div class="tree-header" onclick="toggleTree('ingest')">
+                        <span><i class="fas fa-upload"></i> Ingest Data</span>
+                        <i class="fas fa-chevron-right tree-arrow"></i>
+                    </div>
+                    <div class="tree-content" id="ingestContent">
+                        <a href="{{ url_for('type1') }}" class="tree-option">
+                            <i class="fas fa-file-csv"></i> Type 1 CSV Direct Ingestion
+                        </a>
+                        <a href="{{ url_for('type2') }}" class="tree-option">
+                            <i class="fas fa-table"></i> Type 2 CSV Pivot Ingestion
+                        </a>
+                        <a href="{{ url_for('type3') }}" class="tree-option">
+                            <i class="fas fa-file-code"></i> Type 3 JSON Direct Ingestion
+                        </a>
+                    </div>
+                </div>
+
+                <div class="tree-item">
+                    <div class="tree-header" onclick="toggleTree('dump')">
+                        <span><i class="fas fa-database"></i> Take Data Dump</span>
+                        <i class="fas fa-chevron-right tree-arrow"></i>
+                    </div>
+                    <div class="tree-content" id="dumpContent">
+                        <a href="{{ url_for('data_dump') }}" class="tree-option">
+                            <i class="fas fa-database"></i> Request Data Dump
+                        </a>
+                    </div>
+                </div>
+
+                <div class="tree-item">
+                    <div class="tree-header" onclick="toggleTree('report')">
+                        <span><i class="fas fa-chart-line"></i> View Reports</span>
+                        <i class="fas fa-chevron-right tree-arrow"></i>
+                    </div>
+                    <div class="tree-content" id="reportContent">
+                        <a href="{{ url_for('price_transparency') }}" class="tree-option">
+                            <i class="fas fa-chart-line"></i> Price Transparency Report
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    <div class="footer">
-        © 2024 MediPriceInsight - All Rights Reserved
-    </div>
+    
+    <footer class="footer">
+        <p>&copy; 2024 MediPriceInsight. All rights reserved.</p>
+    </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleTree(id) {
+            const content = document.getElementById(id + 'Content');
+            const arrow = content.previousElementSibling.querySelector('.tree-arrow');
+            
+            // Toggle active class for content
+            content.classList.toggle('active');
+            // Toggle active class for arrow
+            arrow.classList.toggle('active');
+        }
+    </script>
 </body>
 </html>

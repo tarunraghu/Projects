@@ -60,5 +60,18 @@ def data_dump():
     # Redirect to the Request Data Dump application
     return redirect('http://127.0.0.1:5004')
 
+@app.route('/price-transparency')
+def price_transparency():
+    # Path to Price Transparency Report application directory
+    price_transparency_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\Price Transparency Report"
+    
+    # Start the Price Transparency Report Flask application in a new process
+    subprocess.Popen(['python', 'app.py'], 
+                    cwd=price_transparency_dir, 
+                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+    
+    # Redirect to the Price Transparency Report application
+    return redirect('http://127.0.0.1:5005')
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
