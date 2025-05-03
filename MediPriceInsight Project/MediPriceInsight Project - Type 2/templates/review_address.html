@@ -362,13 +362,17 @@
         <!-- Hospital Address Information -->
         <div class="address-section">
             <h2>Hospital Address Information</h2>
-            <div class="address-info">
-                <p><strong>Hospital Name:</strong> {{ address_data.hospital_name }}</p>
-                <p><strong>Last Updated:</strong> {{ address_data.last_updated_on }}</p>
-                <p><strong>Version:</strong> {{ address_data.version }}</p>
-                <p><strong>Location:</strong> {{ address_data.hospital_location }}</p>
-                <p><strong>Address:</strong> {{ address_data.hospital_address }}</p>
-            </div>
+            <form id="addressForm">
+                <div class="address-info">
+                    <p><strong>Hospital Name:</strong> {{ address_data.hospital_name }}</p>
+                    <p><strong>Last Updated:</strong> {{ address_data.last_updated_on }}</p>
+                    <p><strong>Version:</strong> {{ address_data.version }}</p>
+                    <p><strong>Location:</strong> {{ address_data.hospital_location }}</p>
+                    <p><strong>Address:</strong> {{ address_data.hospital_address }}</p>
+                    <label><strong>Region:</strong> <input type="text" id="region" name="region" required></label>
+                    <label><strong>City:</strong> <input type="text" id="city" name="city" required></label>
+                </div>
+            </form>
         </div>
 
         <!-- Button Container -->
@@ -480,19 +484,23 @@
                 showSpinner();
                 showError(null); // Clear any existing error
                 showSuccess(null); // Clear any existing success message
-                
+                const region = document.getElementById('region').value.trim();
+                const city = document.getElementById('city').value.trim();
+                if (!region || !city) {
+                    showError('Both region and city are required.');
+                    hideSpinner();
+                    return;
+                }
                 const response = await fetch('/load-address-data', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify({ region, city })
                 });
-                
                 const result = await response.json();
-                
                 if (result.success) {
                     showSuccess(result.message);
-                    // Optionally redirect to the next page after successful load
                     setTimeout(() => {
                         window.location.href = '/review-charges';
                     }, 2000);

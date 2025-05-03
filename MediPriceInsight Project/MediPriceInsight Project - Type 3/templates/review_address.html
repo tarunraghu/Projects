@@ -369,6 +369,18 @@
                 <p><strong>Location:</strong> {{ address_data.hospital_location }}</p>
                 <p><strong>Address:</strong> {{ address_data.hospital_address }}</p>
             </div>
+            <form id="regionCityForm" style="margin-top: 32px;">
+                <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 220px;">
+                        <label for="region" style="font-weight: 600; color: #374151;">Region <span style="color: #ef4444;">*</span></label><br>
+                        <input type="text" id="region" name="region" required style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #d1d5db; margin-top: 6px;">
+                    </div>
+                    <div style="flex: 1; min-width: 220px;">
+                        <label for="city" style="font-weight: 600; color: #374151;">City <span style="color: #ef4444;">*</span></label><br>
+                        <input type="text" id="city" name="city" required style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #d1d5db; margin-top: 6px;">
+                    </div>
+                </div>
+            </form>
         </div>
 
         <!-- Button Container -->
@@ -476,23 +488,28 @@
         });
 
         async function loadAddressDataToDB() {
+            // Validate region and city fields
+            const region = document.getElementById('region').value.trim();
+            const city = document.getElementById('city').value.trim();
+            if (!region || !city) {
+                showError('Both Region and City are required.');
+                return;
+            }
             try {
                 showSpinner();
                 showError(null); // Clear any existing error
                 showSuccess(null); // Clear any existing success message
-                
+                // Send region and city to backend (if needed, can be added to session)
                 const response = await fetch('/load-address-data', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify({ region, city })
                 });
-                
                 const result = await response.json();
-                
                 if (result.success) {
                     showSuccess(result.message);
-                    // Optionally redirect to the next page after successful load
                     setTimeout(() => {
                         window.location.href = '/review-charges';
                     }, 2000);

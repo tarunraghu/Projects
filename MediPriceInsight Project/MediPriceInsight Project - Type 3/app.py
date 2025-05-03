@@ -1323,6 +1323,16 @@ def preview_data():
 def load_address_data_route():
     """Endpoint to load address data into PostgreSQL"""
     try:
+        # Get region and city from request JSON
+        data = request.get_json() or {}
+        region = data.get('region', '').strip()
+        city = data.get('city', '').strip()
+        if not region or not city:
+            return jsonify({
+                'success': False,
+                'error': 'Both Region and City are required.'
+            }), 400
+
         # Get address data from session
         address_data = session.get('address_data')
         if not address_data:
@@ -1330,7 +1340,11 @@ def load_address_data_route():
                 'success': False,
                 'error': 'No address data found in session'
             }), 400
-            
+        
+        # Add region and city to address_data
+        address_data['region'] = region
+        address_data['city'] = city
+        session['address_data'] = address_data
         logger.info(f"Loading address data: {address_data}")
         
         # Create hospital_address table if it doesn't exist

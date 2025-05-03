@@ -237,7 +237,6 @@ def create_hospital_address_table():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
         create_table_query = """
         CREATE TABLE IF NOT EXISTS hospital_address (
             id SERIAL PRIMARY KEY,
@@ -245,15 +244,14 @@ def create_hospital_address_table():
             last_updated_on VARCHAR(50),
             version VARCHAR(50),
             hospital_location VARCHAR(255),
-            hospital_address VARCHAR(255)
+            hospital_address VARCHAR(255),
+            region VARCHAR(100),
+            city VARCHAR(100)
         );
         """
-        
         cur.execute(create_table_query)
         conn.commit()
-        
         logger.info("Successfully ensured hospital_address table exists")
-        
     except Exception as e:
         logger.error(f"Error creating hospital_address table: {str(e)}")
         logger.error(traceback.format_exc())
@@ -441,24 +439,13 @@ def load_address_data(data):
     """Load address data into PostgreSQL using Pandas"""
     try:
         logger.info("Starting to load address data using Pandas")
-        
-        # Create a DataFrame from the address data
         df = pd.DataFrame([data])
-        
-        # Create SQLAlchemy engine for PostgreSQL
         engine = create_engine(f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
-        
-        # First, delete existing record for this hospital if it exists
         with engine.connect() as connection:
-            connection.execute(text("DELETE FROM hospital_address WHERE hospital_name = :hospital_name"), 
-                            {"hospital_name": data['hospital_name']})
+            connection.execute(text("DELETE FROM hospital_address WHERE hospital_name = :hospital_name"), {"hospital_name": data['hospital_name']})
             connection.commit()
-        
-        # Write DataFrame to PostgreSQL
         df.to_sql('hospital_address', engine, if_exists='append', index=False)
-        
         logger.info(f"Successfully loaded address data for hospital: {data['hospital_name']}")
-        
     except Exception as e:
         logger.error(f"Error loading address data: {str(e)}")
         logger.error(traceback.format_exc())
@@ -1673,38 +1660,38 @@ def preview_data():
 def load_address_data_route():
     """Endpoint to load address data into PostgreSQL"""
     try:
-        # Get address data from session
         address_data = session.get('address_data')
         if not address_data:
-            return jsonify({
-                'success': False,
-                'error': 'No address data found in session'
-            }), 400
-            
+            return jsonify({'success': False, 'error': 'No address data found in session'}), 400
+        req_data = request.get_json() or {}
+        region = req_data.get('region')
+        city = req_data.get('city')
+        if not region or not city:
+            return jsonify({'success': False, 'error': 'Both region and city are required.'}), 400
+        address_data['region'] = region
+        address_data['city'] = city
         logger.info(f"Loading address data: {address_data}")
-        
-        # Create hospital_address table if it doesn't exist
         create_hospital_address_table()
-        
-        # Load the address data
         load_address_data(address_data)
-        
-        # Set address_confirmed flag in session
         session['address_confirmed'] = True
-        
-        return jsonify({
-            'success': True,
-            'message': f'Successfully loaded address data for hospital: {address_data["hospital_name"]}',
-            'redirect': '/review-charges'  # Add redirect URL to response
-        })
-        
+        # Write to CSV as well
+        address_file = session.get('address_file')
+        if address_file:
+            with open(address_file, 'w', newline='', encoding='utf-8') as addrfile:
+                writer = csv.writer(addrfile)
+                writer.writerow(['hospital_name', 'last_updated_on', 'version', 'hospital_location', 'hospital_address'])
+                writer.writerow([
+                    address_data.get('hospital_name', ''),
+                    address_data.get('last_updated_on', ''),
+                    address_data.get('version', ''),
+                    address_data.get('hospital_location', ''),
+                    address_data.get('hospital_address', '')
+                ])
+        return jsonify({'success': True, 'message': f'Successfully loaded address data for hospital: {address_data["hospital_name"]}', 'redirect': '/review-charges'})
     except Exception as e:
         logger.error(f"Error loading address data: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 def process_chunks(df, chunk_size=50000, task=None):
     """Process DataFrame in chunks and insert into database using PySpark JDBC"""
