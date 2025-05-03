@@ -150,7 +150,6 @@ def get_regions():
             conn.close()
 
 @app.route('/api/cities')
-@cache.cached(timeout=300)  # Cache for 5 minutes
 def get_cities():
     start_time = time.time()
     conn = get_db_connection()
