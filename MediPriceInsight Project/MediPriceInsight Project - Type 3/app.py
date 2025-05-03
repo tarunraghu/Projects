@@ -1656,6 +1656,12 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             conn = get_db_connection()
             try:
                 log_ingestion_details(conn, log_data)
+                # Call the cleaning procedure after load
+                logger.info('Calling public.clean_hospital_charges procedure...')
+                cur = conn.cursor()
+                cur.execute('CALL public.clean_hospital_charges();')
+                conn.commit()
+                logger.info('public.clean_hospital_charges procedure completed.')
             finally:
                 return_db_connection(conn)
             
