@@ -958,6 +958,9 @@ function updateTable() {
     reportTableBody.innerHTML = '';
     reportTableBody.appendChild(fragment);
     
+    // Initialize column resizing after table is created
+    initializeColumnResizing();
+    
     console.timeEnd('updateTable');
 }
 
@@ -1658,4 +1661,56 @@ function exportTableToCSV() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// Add column resizing functionality
+function initializeColumnResizing() {
+    const table = document.querySelector('.table');
+    const headers = table.querySelectorAll('th');
+    let isResizing = false;
+    let currentHeader = null;
+    let startX = 0;
+    let startWidth = 0;
+
+    headers.forEach(header => {
+        const resizer = document.createElement('div');
+        resizer.className = 'resizer';
+        header.appendChild(resizer);
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            currentHeader = header;
+            startX = e.pageX;
+            startWidth = header.offsetWidth;
+            resizer.classList.add('resizing');
+            e.preventDefault();
+        });
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+
+        const width = startWidth + (e.pageX - startX);
+        if (width > 50) { // Minimum width of 50px
+            currentHeader.style.width = width + 'px';
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isResizing) return;
+        
+        isResizing = false;
+        if (currentHeader) {
+            currentHeader.querySelector('.resizer').classList.remove('resizing');
+            currentHeader = null;
+        }
+    });
+}
+
+// Call this function after table headers are created
+function createTableHeaders(data) {
+    // ... existing code ...
+    
+    // After creating headers, initialize resizing
+    initializeColumnResizing();
 } 

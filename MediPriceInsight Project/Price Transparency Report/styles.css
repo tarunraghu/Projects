@@ -82,6 +82,28 @@ body {
     padding: 12px 16px;
     user-select: none;
     border-right: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+}
+
+.table th .resizer {
+    position: absolute;
+    right: 0;
+    top: 0;
+    height: 100%;
+    width: 5px;
+    background: rgba(255, 255, 255, 0.1);
+    cursor: col-resize;
+    user-select: none;
+    transition: background-color 0.2s;
+}
+
+.table th .resizer:hover,
+.table th .resizer.resizing {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.table th:last-child .resizer {
+    display: none;
 }
 
 .table th:last-child {
