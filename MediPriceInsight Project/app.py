@@ -3,6 +3,7 @@ import os
 import subprocess
 
 app = Flask(__name__)
+base_dir = os.path.abspath(os.getcwd())
 
 @app.route('/')
 def index():
@@ -11,7 +12,7 @@ def index():
 @app.route('/type1')
 def type1():
     # Path to Type 1 project directory
-    type1_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 1"
+    type1_dir = os.path.join(base_dir, "MediPriceInsight Project - Type 1")
     
     # Start the Type 1 Flask application in a new process
     subprocess.Popen(['python', 'app.py'], 
@@ -24,7 +25,7 @@ def type1():
 @app.route('/type2')
 def type2():
     # Path to Type 2 project directory
-    type2_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 2"
+    type2_dir = os.path.join(base_dir, "MediPriceInsight Project - Type 2")
     
     # Start the Type 2 Flask application in a new process
     subprocess.Popen(['python', 'app.py'], 
@@ -37,7 +38,7 @@ def type2():
 @app.route('/type3')
 def type3():
     # Path to Type 3 project directory
-    type3_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 3"
+    type3_dir = os.path.join(base_dir, "MediPriceInsight Project - Type 3")
     
     # Start the Type 3 Flask application in a new process
     subprocess.Popen(['python', 'app.py'], 
@@ -50,7 +51,7 @@ def type3():
 @app.route('/dump-data')
 def data_dump():
     # Path to Request Data Dump application directory
-    data_dump_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\Request Data Dump"
+    data_dump_dir = os.path.join(base_dir, "Request Data Dump")
     
     # Start the Request Data Dump Flask application in a new process
     subprocess.Popen(['python', 'app.py'], 
@@ -58,12 +59,12 @@ def data_dump():
                     creationflags=subprocess.CREATE_NEW_CONSOLE)
     
     # Redirect to the Request Data Dump application
-    return redirect('http://127.0.0.1:5004')
+    return redirect('http://localhost:5004')
 
 @app.route('/price-transparency')
 def price_transparency():
     # Path to Price Transparency Report application directory
-    price_transparency_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project\Price Transparency Report"
+    price_transparency_dir = os.path.join(base_dir, "Price Transparency Report")
     
     # Start the Price Transparency Report Flask application in a new process
     subprocess.Popen(['python', 'app.py'], 
@@ -71,7 +72,7 @@ def price_transparency():
                     creationflags=subprocess.CREATE_NEW_CONSOLE)
     
     # Redirect to the Price Transparency Report application
-    return redirect('http://127.0.0.1:5005')
+    return redirect('http://localhost:5005')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

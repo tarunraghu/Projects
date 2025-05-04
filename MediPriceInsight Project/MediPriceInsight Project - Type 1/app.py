@@ -2779,7 +2779,7 @@ def cleanup_spark_temp_dirs():
 # Add cleanup call at application startup
 if __name__ == '__main__':
     cleanup_old_temp_dirs()
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(debug=True, port=5001, host='0.0.0.0')
 
 # Add this new route to get hospitals for the dropdown
 @app.route('/api/hospitals-list')

@@ -9,7 +9,7 @@ from datetime import datetime
 class FlaskAppManager:
     def __init__(self):
         self.processes = {}
-        self.base_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project"
+        self.base_dir = os.path.abspath(os.getcwd())  # Get absolute path of current directory
         self.apps = [
             {
                 "name": "Main Application",
@@ -49,21 +49,30 @@ class FlaskAppManager:
             }
         ]
 
-    def start_app(self, app):
-        """Start a Flask application and store its process"""
-        print(f"Starting {app['name']} on port {app['port']}...")
+    def start_app(self, app_info):
+        """Start a Flask application"""
         try:
+            # Check if directory exists
+            if not os.path.exists(app_info['directory']):
+                print(f"Directory does not exist: {app_info['directory']}")
+                return None
+
+            # Start the application
             process = subprocess.Popen(
                 ['python', 'app.py'],
-                cwd=app['directory'],
-                creationflags=subprocess.CREATE_NO_WINDOW  # Run in background
+                cwd=app_info['directory'],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                shell=True
             )
-            app['pid'] = process.pid
-            self.processes[app['pid']] = process
-            time.sleep(2)  # Give some time for the app to start
-            print(f"✓ {app['name']} started successfully (PID: {process.pid})")
+            
+            # Wait for the application to be ready
+            time.sleep(2)  # Give the application time to start
+            
+            print(f"Started {app_info['name']} on port {app_info['port']} (PID: {process.pid})")
+            return process
         except Exception as e:
-            print(f"✗ Failed to start {app['name']}: {str(e)}")
+            print(f"Error starting {app_info['name']}: {str(e)}")
+            return None
 
     def stop_app(self, app):
         """Stop a Flask application"""
