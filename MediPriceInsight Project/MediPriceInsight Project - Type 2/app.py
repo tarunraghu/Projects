@@ -698,8 +698,8 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             # Log all columns for debugging
             logger.info(f"Available columns: {df.columns}")
             
-            # Find all code type columns that match the pattern code|x|type
-            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+            # Find all code type columns that match the pattern code|x|type or code,x,type
+            code_type_columns = sorted([col_name for col_name in df.columns if ('|type' in col_name.lower() or ',type' in col_name.lower())])
             logger.info(f"Found code type columns: {code_type_columns}")
             
             # Initialize variables for code and code_type
@@ -721,14 +721,16 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                 
                 if cpt_count > 0:
                     code_type_col = type_col
-                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                    col_num = type_col.split('|')[1]
-                    # Construct the corresponding code column name
-                    potential_code_col = f"code|{col_num}"
-                    
-                    if potential_code_col in df.columns:
-                        code_col = potential_code_col
-                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                    # Extract the number from the type column (e.g., 'code|3|type' or 'code,3,type' -> '3')
+                    col_num = type_col.split('|')[1] if '|' in type_col else type_col.split(',')[1]
+                    # Construct the corresponding code column name with both possible separators
+                    potential_code_cols = [f"code|{col_num}", f"code,{col_num}"]
+                    for potential_code_col in potential_code_cols:
+                        if potential_code_col in df.columns:
+                            code_col = potential_code_col
+                            logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                            break
+                    if code_col:
                         break
             
             if not code_type_col or not code_col:
@@ -760,9 +762,9 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                         negotiated_dollar_columns.append(col_name)
                     elif 'negotiated_algorithm' in col_lower:
                         negotiated_algorithm_columns.append(col_name)
-                    elif 'min' in col_lower and '|min' in col_name:
+                    elif 'min' in col_lower and ('|min' in col_name or ',min' in col_name):
                         standard_charge_columns['min'] = col_name
-                    elif 'max' in col_lower and '|max' in col_name:
+                    elif 'max' in col_lower and ('|max' in col_name or ',max' in col_name):
                         standard_charge_columns['max'] = col_name
                     elif 'discounted_cash' in col_lower:
                         standard_charge_columns['discounted_cash'] = col_name
@@ -801,13 +803,14 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             # Create structs for negotiated dollar columns
             negotiated_structs = []
             for col_name in negotiated_dollar_columns:
-                parts = col_name.split('|')
-                if len(parts) >= 4:  # standard_charge|payer|plan|negotiated_dollar
+                # Handle both pipe and comma separators
+                parts = col_name.split('|') if '|' in col_name else col_name.split(',')
+                if len(parts) >= 4:  # standard_charge|payer|plan|negotiated_dollar or standard_charge,payer,plan,negotiated_dollar
                     payer = parts[1]
                     plan = parts[2]
                     
                     # Find corresponding columns for this payer/plan combination
-                    base_payer_plan = f"{parts[0]}|{payer}|{plan}"
+                    base_payer_plan = f"{parts[0]}|{payer}|{plan}" if '|' in col_name else f"{parts[0]},{payer},{plan}"
                     
                     # Get corresponding columns
                     negotiated_algorithm = next((c for c in negotiated_algorithm_columns if c.startswith(base_payer_plan)), None)
@@ -875,8 +878,8 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
             # Log all columns for debugging
             logger.info(f"Available columns: {df.columns}")
             
-            # Find all code type columns that match the pattern code|x|type
-            code_type_columns = sorted([col_name for col_name in df.columns if '|type' in col_name.lower()])
+            # Find all code type columns that match the pattern code|x|type or code,x,type
+            code_type_columns = sorted([col_name for col_name in df.columns if ('|type' in col_name.lower() or ',type' in col_name.lower())])
             logger.info(f"Found code type columns: {code_type_columns}")
             
             # Initialize variables for code and code_type
@@ -898,14 +901,16 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
                 
                 if cpt_count > 0:
                     code_type_col = type_col
-                    # Extract the number from the type column (e.g., 'code|3|type' -> '3')
-                    col_num = type_col.split('|')[1]
-                    # Construct the corresponding code column name
-                    potential_code_col = f"code|{col_num}"
-                    
-                    if potential_code_col in df.columns:
-                        code_col = potential_code_col
-                        logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                    # Extract the number from the type column (e.g., 'code|3|type' or 'code,3,type' -> '3')
+                    col_num = type_col.split('|')[1] if '|' in type_col else type_col.split(',')[1]
+                    # Construct the corresponding code column name with both possible separators
+                    potential_code_cols = [f"code|{col_num}", f"code,{col_num}"]
+                    for potential_code_col in potential_code_cols:
+                        if potential_code_col in df.columns:
+                            code_col = potential_code_col
+                            logger.info(f"Found matching code column: {code_col} for type column: {code_type_col}")
+                            break
+                    if code_col:
                         break
             
             if not code_type_col or not code_col:
