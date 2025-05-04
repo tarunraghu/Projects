@@ -183,27 +183,86 @@ function initializeSelect2(filter, placeholder) {
         $(filter).select2('destroy');
     }
 
+    // Special handling for city filter
+    const isCityFilter = filter.id === 'cityFilter';
+    
     // Initialize Select2 with updated configuration
     $(filter).select2({
         theme: 'bootstrap-5',
         width: '100%',
         placeholder: placeholder,
         allowClear: true,
-        multiple: false,
-        closeOnSelect: true,
+        multiple: isCityFilter,
+        closeOnSelect: !isCityFilter,
         templateResult: function(data) {
             if (!data.id) return data.text;
             return $('<span>').text(data.text);
         },
         templateSelection: function(data) {
             if (!data.id) return data.text;
-            // Add an X button to the chip
-            const chip = $('<span class="selected-chip">').text(data.text);
-            const closeBtn = $('<span class="chip-close" style="margin-left:8px;cursor:pointer;font-weight:bold;">×</span>');
-            chip.append(closeBtn);
-            return chip;
+            if (isCityFilter) {
+                const chip = $('<span class="selected-chip">').text(data.text);
+                const closeBtn = $('<span class="chip-close">×</span>');
+                chip.append(closeBtn);
+                return chip;
+            }
+            return data.text;
         }
     });
+
+    // Add custom styles for city filter
+    if (isCityFilter) {
+        const style = document.createElement('style');
+        style.textContent = `
+            #cityFilter + .select2-container .select2-selection--multiple {
+                min-height: 38px;
+                padding: 2px 8px;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__choice {
+                background-color: var(--primary-color);
+                color: white;
+                border: none;
+                padding: 2px 8px;
+                margin: 4px 4px 4px 0;
+                border-radius: 4px;
+                display: flex;
+                align-items: center;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__choice__remove {
+                color: white;
+                margin-left: 8px;
+                border: none;
+                background: transparent;
+                padding: 0 4px;
+                order: 2;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__choice__remove:hover {
+                background-color: rgba(255, 255, 255, 0.2);
+                border-radius: 2px;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__rendered {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__choice {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                min-width: 0;
+            }
+            #cityFilter + .select2-container .select2-selection--multiple .select2-selection__choice__display {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                flex: 1;
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Force update of the selection display
+        $(filter).trigger('change');
+    }
 
     // Add event delegation for chip close
     $(filter).next('.select2-container').off('click', '.chip-close').on('click', '.chip-close', function(e) {
@@ -352,6 +411,19 @@ function updateCityFilter(cities) {
             $(cityFilter).select2('destroy');
         }
         initializeSelect2(cityFilter, 'Select City...');
+        
+        // Force update of the selection display
+        $(cityFilter).trigger('change');
+        
+        // Ensure the container is properly styled
+        const container = $(cityFilter).next('.select2-container');
+        if (container) {
+            container.find('.select2-selection--multiple').css({
+                'display': 'flex',
+                'flex-wrap': 'wrap',
+                'align-items': 'center'
+            });
+        }
     }
 }
 
