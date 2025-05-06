@@ -383,4 +383,27 @@ body {
     content: 'Calculating...';
     color: #666;
     font-style: italic;
+}
+
+/* Description Section Styles */
+.card-title {
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.card-text {
+    color: #34495e;
+    line-height: 1.6;
+}
+
+.list-unstyled li {
+    margin-bottom: 0.5rem;
+    color: #34495e;
+}
+
+.alert-info {
+    background-color: #f8f9fa;
+    border-color: #e9ecef;
+    color: #495057;
 } 

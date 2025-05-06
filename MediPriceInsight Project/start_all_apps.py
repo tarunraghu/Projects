@@ -45,7 +45,16 @@ class FlaskAppManager:
                 "name": "Price Transparency Report",
                 "port": 5005,
                 "directory": os.path.join(self.base_dir, "Price Transparency Report"),
-                "pid": None
+                "pid": None,
+                "description": """This report provides detailed pricing information for medical procedures across different healthcare providers, payers, and plans. The data helps patients and healthcare consumers make informed decisions about their healthcare costs by comparing prices for the same procedures across different facilities.
+
+Key Features:
+• Compare prices for specific CPT codes across different hospitals
+• View negotiated rates with different insurance payers and plans
+• Filter data by region, city, and healthcare facility
+• Export data for further analysis
+
+Note: Prices shown are based on the most recent data available and may vary based on individual circumstances and insurance coverage."""
             }
         ]
 
@@ -101,6 +110,8 @@ class FlaskAppManager:
         for app in self.apps:
             status = "Running" if app['pid'] else "Stopped"
             print(f"- {app['name']}: http://localhost:{app['port']} ({status})")
+            if 'description' in app:
+                print(f"  Description: {app['description']}")
         print("\nCommands:")
         print("1. 'status' - Show current status")
         print("2. 'restart' - Restart all applications")
