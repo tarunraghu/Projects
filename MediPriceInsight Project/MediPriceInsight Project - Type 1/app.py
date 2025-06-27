@@ -5,7 +5,6 @@ import psycopg2
 from psycopg2 import pool
 import json
 from datetime import datetime
-from ingestion_strategies.type1_strategy import Type1IngestionStrategy
 import os
 import traceback
 import csv
@@ -81,10 +80,6 @@ class SparkManager:
                 .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
                 .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
                 .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-                .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "LEGACY") \
-                .config("spark.sql.legacy.parquet.datetimeRebaseModeInRead", "LEGACY") \
-                .config("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY") \
-                .config("spark.sql.legacy.parquet.int96RebaseModeInRead", "LEGACY") \
                 .config("spark.datasource.postgresql.url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
                 .config("spark.datasource.postgresql.user", DB_CONFIG['user']) \
                 .config("spark.datasource.postgresql.password", DB_CONFIG['password']) \
@@ -99,11 +94,11 @@ class SparkManager:
 
 # Database configuration
 DB_CONFIG = {
-    "dbname": "healthcarepoc",
-    "user": "postgres",
-    "password": "Consis10C!",  # Updated password
-    "host": "localhost",
-    "port": "5432"
+    "dbname": os.environ.get("DB_NAME", "healthcarepoc"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "Consis10C!"),
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": os.environ.get("DB_PORT", "5432")
 }
 
 def return_db_connection(conn):
@@ -447,10 +442,9 @@ def load_address_data(data):
         engine = create_engine(f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
         
         # First, delete existing record for this hospital if it exists
-        with engine.connect() as connection:
+        with engine.begin() as connection:
             connection.execute(text("DELETE FROM hospital_address WHERE hospital_name = :hospital_name"), 
                             {"hospital_name": data['hospital_name']})
-            connection.commit()
         
         # Write DataFrame to PostgreSQL
         df.to_sql('hospital_address', engine, if_exists='append', index=False)
