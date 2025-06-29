@@ -73,7 +73,7 @@ pip install flask flask-cors psycopg2-binary pyspark pandas sqlalchemy
 ```bash
 DB_NAME=healthcarepoc
 DB_USER=postgres
-DB_PASSWORD=your_password
+DB_PASSWORD=Consis10C!
 DB_HOST=localhost
 DB_PORT=5432
 ```
@@ -113,39 +113,18 @@ The application will start on `http://localhost:5001`
 - Archive inactive records
 - View processing logs
 
-## API Endpoints
-
-### Core Routes
-- `GET /`: Main application page
-- `POST /submit-form`: File upload and initial processing
-- `GET /review-address`: Address review page
-- `GET /review-charges`: Charge data review page
-- `POST /load-address-data`: Save address information
-- `POST /load-charges`: Initiate charge data processing
-
-### Data Management
-- `GET /dump-data`: Data export interface
-- `POST /generate-dump/<table>`: Generate data dumps
-- `GET /download/<filename>`: Download generated files
-- `POST /archive-inactive`: Archive inactive records
-
-### API Endpoints
-- `GET /api/hospitals-list`: Get list of hospitals
-- `GET /preview-data`: Preview processed data
-- `GET /task-status/<task_id>`: Get background task status
-
 ## Data Processing
 
-### Type 1 File Structure Requirements
-CSV files must contain:
-1. **Header Row**: Column definitions
-2. **Address Row**: Hospital address information
-3. **Data Header**: Charge data column headers
-4. **Data Rows**: Actual charge data
+### Type 1 Ingestion Workflow
+1. **File Upload**: Upload CSV file containing hospital standard charge data
+2. **File Splitting**: Automatically split into address and charges files
+3. **Address Review**: Review and confirm hospital address information
+4. **Data Preview**: Preview processed charges data before ingestion
+5. **Background Processing**: Process charges data in background with progress tracking
+6. **Data Storage**: Store processed data in PostgreSQL database
 
 ### Supported Data Types
-- **CPT Codes**: Current Procedural Terminology codes
-- **MS-DRG Codes**: Medicare Severity Diagnosis Related Groups
+- **CPT Codes**: Current Procedural Terminology codes (Primary supported code type)
 - **Standard Charges**: Gross, negotiated, minimum, and maximum charges
 - **Payer Information**: Insurance provider and plan details
 
@@ -210,19 +189,6 @@ SparkSession.builder \
 - Parallel processing
 - Chunked data handling
 
-## Recent Updates
-
-### Code Cleanup (Latest)
-- Removed unused table creation functions
-- Eliminated unused imports and dependencies
-- Streamlined codebase for better maintainability
-- Improved error handling for stored procedures
-
-### Optimizations
-- Reduced memory footprint
-- Faster application startup
-- Cleaner code structure
-- Better error messages
 
 ## Monitoring & Maintenance
 
