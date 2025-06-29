@@ -9,22 +9,18 @@ import os
 import traceback
 import csv
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType
 import pandas as pd
 from sqlalchemy import create_engine, text
 import threading
 import queue
 import time
-from datetime import datetime, timedelta
-from pyspark.sql.functions import lit, round as spark_round, col, trim, upper, count, when, split, element_at, explode, array, struct, expr, regexp_replace
-from io import StringIO
+from pyspark.sql.functions import lit, round as spark_round, col, trim, upper, count, when, expr, regexp_replace
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
 import re
 import shutil
 import stat
 import uuid
-import gzip
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -158,178 +154,6 @@ def test_db_connection():
 db_status, db_message = test_db_connection()
 logger.info(f"Database connection test: {db_message}")
 
-# Table creation functions removed - handled by backend code
-
-def create_hospital_data_table():
-    """Create the hospital_data table if it doesn't exist"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Drop the existing table if it exists
-        cur.execute("DROP TABLE IF EXISTS hospital_data;")
-        
-        create_table_query = """
-        CREATE TABLE hospital_data (
-            id SERIAL PRIMARY KEY,
-            description VARCHAR(255),
-            code VARCHAR(50),
-            code_type VARCHAR(50),
-            payer_name VARCHAR(255),
-            plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC,
-            standard_charge_negotiated_dollar NUMERIC,
-            standard_charge_min NUMERIC,
-            standard_charge_max NUMERIC
-        );
-        """
-        
-        cur.execute(create_table_query)
-        conn.commit()
-        
-        logger.info("Successfully created hospital_data table with new schema")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_data table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            return_db_connection(conn)
-
-def create_hospital_charges_table():
-    """Create the hospital_charges table with standardized schema"""
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        
-        # Create the main charges table
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS hospital_charges (
-            id SERIAL PRIMARY KEY,
-            hospital_name TEXT,
-            description TEXT,
-            code VARCHAR(50),
-            code_type VARCHAR(50),
-            payer_name VARCHAR(255),
-            plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC(20,2),
-            standard_charge_discounted_cash NUMERIC(20,2),
-            standard_charge_negotiated_dollar NUMERIC(20,2),
-            standard_charge_min NUMERIC(20,2),
-            standard_charge_max NUMERIC(20,2),
-            estimated_amount NUMERIC(20,2),
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (hospital_name, description, code, code_type, payer_name, plan_name)
-        );
-        """)
-        
-        # Create index on hospital_name for faster lookups
-        cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_hospital_charges_hospital_name 
-        ON hospital_charges(hospital_name);
-        """)
-        
-        conn.commit()
-        logger.info("Successfully created hospital_charges table with new schema")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_charges table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        return_db_connection(conn)
-
-def create_hospital_charges_archive_table():
-    """Create the hospital_charges_archive table with standardized schema"""
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        
-        # Create the archive table
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS hospital_charges_archive (
-            id SERIAL PRIMARY KEY,
-            hospital_name TEXT,
-            description TEXT,
-            code VARCHAR(50),
-            code_type VARCHAR(50),
-            payer_name VARCHAR(255),
-            plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC(20,2),
-            standard_charge_negotiated_dollar NUMERIC(20,2),
-            standard_charge_min NUMERIC(20,2),
-            standard_charge_max NUMERIC(20,2),
-            standard_charge_discounted_cash NUMERIC(20,2),
-            estimated_amount NUMERIC(20,2),
-            original_created_at TIMESTAMP,
-            archive_reason TEXT,
-            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        
-        conn.commit()
-        logger.info("Successfully created hospital_charges_archive table with finalized schema")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_charges_archive table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        return_db_connection(conn)
-
-def create_hospital_log_table():
-    """Create the hospital_log table if it doesn't exist"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS hospital_log (
-            id SERIAL PRIMARY KEY,
-            hospital_name TEXT,
-            user_name VARCHAR(255),
-            ingestion_type VARCHAR(50),
-            ingestion_start_time TIMESTAMP,
-            ingestion_end_time TIMESTAMP,
-            total_records INTEGER,
-            unique_records INTEGER,
-            archived_records INTEGER,
-            status VARCHAR(50),
-            error_message TEXT,
-            file_path TEXT,
-            processing_time_seconds NUMERIC,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        
-        cur.execute(create_table_query)
-        conn.commit()
-        
-        logger.info("Successfully ensured hospital_log table exists with correct schema")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_log table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            return_db_connection(conn)
 
 def log_ingestion_details(conn, log_data):
     """Log ingestion details to hospital_log table"""
@@ -398,64 +222,6 @@ def load_address_data(data):
         logger.error(f"Error loading address data: {str(e)}")
         logger.error(traceback.format_exc())
         raise
-
-def load_hospital_data(file_path):
-    """Load data from hospital data CSV file into hospital_data table using PySpark"""
-    spark = None
-    try:
-        logger.info(f"Starting to load hospital data from file: {file_path}")
-        
-        # Create Spark session if not exists
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Processing") \
-            .config("spark.jars", "postgresql-42.7.2.jar") \
-            .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .getOrCreate()
-        
-        logger.info("Spark session created successfully")
-        
-        # Read the CSV file with first row as header and handle empty column names
-        logger.info("Attempting to read CSV file...")
-        df = spark.read.option("header", "true") \
-            .option("encoding", "UTF-8") \
-            .option("inferSchema", "true") \
-            .option("mode", "PERMISSIVE") \
-            .option("emptyValue", "") \
-            .option("treatEmptyValuesAsNulls", "true") \
-            .csv(file_path)
-        
-        # Rename empty column names to _cX format
-        new_columns = []
-        for i, col in enumerate(df.columns):
-            if not col or col.strip() == "":
-                new_columns.append(f"_c{i}")
-            else:
-                new_columns.append(col)
-        
-        # Rename columns
-        for old_col, new_col in zip(df.columns, new_columns):
-            df = df.withColumnRenamed(old_col, new_col)
-        
-        logger.info("CSV file read successfully")
-        
-        # Get total rows count
-        total_rows = df.count()
-        logger.info(f"Total rows loaded: {total_rows}")
-        
-        return df
-        
-    except Exception as e:
-        logger.error(f"Error loading hospital data: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if spark:
-            try:
-                spark.stop()
-            except Exception as e:
-                logger.error(f"Error closing Spark session: {str(e)}")
 
 def validate_file_path(file_path):
     """Validate and normalize file path"""
@@ -1637,151 +1403,6 @@ def load_address_data_route():
             'error': str(e)
         }), 500
 
-def process_chunks(df, chunk_size=50000, task=None):
-    """Process DataFrame in chunks and insert into database using PySpark JDBC"""
-    total_rows = df.count()
-    num_chunks = (total_rows + chunk_size - 1) // chunk_size
-    
-    # Calculate number of partitions based on data size and chunk size
-    num_partitions = min(num_chunks, 200)  # Cap at 200 partitions to avoid over-partitioning
-    
-    # Repartition the DataFrame for better distribution
-    df = df.repartition(num_partitions)
-    
-    # Add row numbers with proper partitioning
-    window_spec = Window.partitionBy(spark_partition_id()).orderBy(monotonically_increasing_id())
-    
-    # Add partition ID and row number
-    df_with_row_num = df.withColumn("partition_id", spark_partition_id()) \
-                        .withColumn("row_num", row_number().over(window_spec))
-    
-    # Get the distinct hospital name from the DataFrame
-    hospital_names = df.select("hospital_name").distinct().collect()
-    if len(hospital_names) != 1:
-        raise ValueError(f"Expected exactly one hospital name, but found {len(hospital_names)}")
-    hospital_name = hospital_names[0][0]
-    
-    # JDBC connection properties
-    jdbc_url = f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-    connection_properties = {
-        "user": DB_CONFIG['user'],
-        "password": DB_CONFIG['password'],
-        "driver": "org.postgresql.Driver",
-        "batchsize": "10000",  # Adjust batch size for optimal performance
-        "truncate": "false",
-        "stringtype": "unspecified"
-    }
-    
-    # Archive and remove existing records for this hospital before processing chunks
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        
-        # Archive existing records
-        cur.execute("""
-            INSERT INTO hospital_charges_archive (
-                hospital_name, description, code, code_type, 
-                payer_name, plan_name, standard_charge_gross,
-                standard_charge_negotiated_dollar, standard_charge_min,
-                standard_charge_max, standard_charge_discounted_cash,
-                estimated_amount, original_created_at, archive_reason
-            )
-            SELECT 
-                hospital_name, description, code, code_type,
-                payer_name, plan_name, standard_charge_gross,
-                standard_charge_negotiated_dollar, standard_charge_min,
-                standard_charge_max, standard_charge_discounted_cash,
-                estimated_amount, created_at, 'New data ingestion'
-            FROM hospital_charges
-            WHERE hospital_name = %s;
-        """, (hospital_name,))
-        
-        result = cur.fetchone()
-        count = result[0] if result else 0
-        
-        if count > 0:
-            # Delete all records for this hospital
-            cur.execute("""
-                DELETE FROM hospital_charges 
-                WHERE hospital_name = %s;
-            """, (hospital_name,))
-            
-            conn.commit()
-            logger.info(f"Successfully archived and removed existing records for hospital: {hospital_name}")
-        
-    finally:
-        if cur:
-            cur.close()
-        return_db_connection(conn)
-    
-    # Process chunks
-    for i in range(num_chunks):
-        start_idx = i * chunk_size + 1  # 1-based row numbers
-        end_idx = min((i + 1) * chunk_size, total_rows)
-        
-        try:
-            # Get chunk of data using row numbers and partition ID
-            chunk = df_with_row_num.filter(
-                (df_with_row_num.row_num >= start_idx) & 
-                (df_with_row_num.row_num <= end_idx)
-            ).drop("row_num", "partition_id")
-            
-            # Create a temporary table for the chunk
-            temp_table = f"temp_hospital_charges_{uuid.uuid4().hex[:8]}"
-            
-            # Write chunk to temporary table
-            chunk.write \
-                .mode("overwrite") \
-                .jdbc(
-                    url=jdbc_url,
-                    table=temp_table,
-                    properties=connection_properties
-                )
-            
-            # Insert from temporary table to main table
-            conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                
-                # Insert new records
-                cur.execute(f"""
-                    INSERT INTO hospital_charges (
-                        hospital_name, description, code, code_type, payer_name, plan_name,
-                        standard_charge_gross, standard_charge_discounted_cash,
-                        standard_charge_negotiated_dollar, standard_charge_min,
-                        standard_charge_max, estimated_amount, is_active
-                    )
-                    SELECT 
-                        t.hospital_name, t.description, t.code, t.code_type, t.payer_name, t.plan_name,
-                        t.standard_charge_gross, t.standard_charge_discounted_cash,
-                        t.standard_charge_negotiated_dollar, t.standard_charge_min,
-                        t.standard_charge_max, t.estimated_amount, TRUE
-                    FROM {temp_table} t;
-                """)
-                
-                conn.commit()
-                
-                # Drop temporary table
-                cur.execute(f"DROP TABLE IF EXISTS {temp_table};")
-                conn.commit()
-                
-            finally:
-                if cur:
-                    cur.close()
-                return_db_connection(conn)
-            
-            # Update progress if task is provided
-            if task:
-                progress = min(95, int((i + 1) * 100 / num_chunks))  # Cap at 95% to show final processing
-                task.progress = progress
-                task.message = f'Processing data: {progress}% complete ({i+1}/{num_chunks} chunks)'
-            
-            logger.info(f"Successfully processed chunk {i+1}/{num_chunks} ({end_idx-start_idx+1} records)")
-            
-        except Exception as e:
-            logger.error(f"Error processing chunk {i+1}: {str(e)}")
-            raise
-
 def process_hospital_charges(data_file, hospital_name, task_id, user_name='system', ingestion_type='unknown', chunk_size=50000):
     """Process and load hospital charges data"""
     start_time = datetime.now()
@@ -1931,9 +1552,15 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 log_ingestion_details(conn, log_data)
                 
                 # Call clean_hospital_charges() stored procedure after successful ingestion
-                cur = conn.cursor()
-                cur.execute("CALL public.clean_hospital_charges()")
-                conn.commit()
+                # Note: This stored procedure should exist in the backend database
+                try:
+                    cur = conn.cursor()
+                    cur.execute("CALL public.clean_hospital_charges()")
+                    conn.commit()
+                    logger.info("Successfully executed clean_hospital_charges() stored procedure")
+                except Exception as sp_error:
+                    logger.warning(f"Stored procedure clean_hospital_charges() not found or failed: {str(sp_error)}")
+                    logger.info("Continuing without stored procedure execution")
             finally:
                 if cur:
                     cur.close()
@@ -2115,51 +1742,6 @@ def task_status(task_id):
             'success': False,
             'error': str(e)
         }), 500
-
-def create_hospital_charges_type2_archive_table():
-    """Create the hospital_charges_type2_archive table for Type 2 ingestion"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Drop the table if it exists to ensure clean schema
-        cur.execute("DROP TABLE IF EXISTS hospital_charges_type2_archive;")
-        
-        create_table_query = """
-        CREATE TABLE hospital_charges_type2_archive (
-            id SERIAL PRIMARY KEY,
-            hospital_name TEXT,
-            description TEXT,
-            code VARCHAR(50),
-            code_type VARCHAR(50),
-            payer_name VARCHAR(255),
-            plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC(38,18),
-            standard_charge_negotiated_dollar NUMERIC(38,18),
-            standard_charge_min NUMERIC(38,18),
-            standard_charge_max NUMERIC(38,18),
-            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            original_created_at TIMESTAMP,
-            archive_reason TEXT
-        );
-        """
-        
-        cur.execute(create_table_query)
-        conn.commit()
-        
-        logger.info("Successfully created hospital_charges_type2_archive table")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_charges_type2_archive table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            return_db_connection(conn)
 
 def process_file(data_file):
     """Process the data file and return result"""
@@ -2591,27 +2173,6 @@ def get_hospitals():
         if conn:
             return_db_connection(conn)
 
-def configure_spark_session():
-    """Configure and create a Spark session with appropriate logging"""
-    try:
-        # Create builder with basic configs
-        builder = SparkSession.builder \
-            .appName("Data Dump Generation") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.executor.memory", "4g")
-        
-        # Create and configure the session
-        spark = builder.getOrCreate()
-        spark.sparkContext.setLogLevel("WARN")
-        
-        return spark
-    except Exception as e:
-        logger.error(f"Failed to configure Spark session: {str(e)}")
-        raise
-
 @app.route('/dump-progress/<task_id>')
 def get_dump_progress(task_id):
     """Get the progress of a data dump operation"""
@@ -2696,33 +2257,6 @@ def cleanup_old_temp_dirs():
                         logger.warning(f"Failed to clean up old temp directory {dir_path}: {str(e)}")
         except Exception as e:
             logger.warning(f"Error during cleanup of old temp directories: {str(e)}")
-
-# At the top of the file, add this function
-def cleanup_spark_temp_dirs():
-    """Clean up Spark temporary directories"""
-    temp_dir = os.path.join(os.environ.get('TEMP', os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'Temp')))
-    try:
-        for item in os.listdir(temp_dir):
-            if item.startswith('spark-'):
-                spark_dir = os.path.join(temp_dir, item)
-                try:
-                    # Use a more robust cleanup approach for Windows
-                    def on_rm_error(func, path, exc_info):
-                        # Try changing permissions and try again
-                        os.chmod(path, stat.S_IWRITE)
-                        func(path)
-                    
-                    shutil.rmtree(spark_dir, onerror=on_rm_error)
-                    logger.info(f"Successfully cleaned up Spark temp directory: {spark_dir}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up Spark temp directory {spark_dir}: {str(e)}")
-    except Exception as e:
-        logger.warning(f"Error during Spark temp directory cleanup: {str(e)}")
-
-# Add cleanup call at application startup
-if __name__ == '__main__':
-    cleanup_old_temp_dirs()
-    app.run(host='0.0.0.0', port=5001, debug=True)
 
 # Add this new route to get hospitals for the dropdown
 @app.route('/api/hospitals-list')
@@ -2854,3 +2388,8 @@ def archive_inactive_records_route():
             'success': False,
             'error': str(e)
         }), 500
+
+# Start the Flask application
+if __name__ == '__main__':
+    cleanup_old_temp_dirs()
+    app.run(host='0.0.0.0', port=5001, debug=True)

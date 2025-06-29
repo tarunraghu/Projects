@@ -1,52 +1,266 @@
-# MediPriceInsight
+# MediPriceInsight - Healthcare Data Processing Application (Type 1)
 
-A web application for ingesting and processing healthcare pricing data.
+## Overview
 
-## Setup
+MediPriceInsight is a Flask-based web application designed to process and manage healthcare pricing data from hospital standard charge files. This application specifically handles **Type 1 ingestion** workflow for hospital charge data processing.
 
-1. Install Python dependencies:
+## Features
+
+### Core Functionality
+- **File Upload & Processing**: Upload CSV files containing hospital standard charge data
+- **Data Validation**: Automatic validation of file structure and data integrity
+- **Type 1 Ingestion**: Specialized processing workflow for Type 1 data format
+- **Address Management**: Separate processing of hospital address information
+- **Data Preview**: Preview data before ingestion to ensure accuracy
+- **Background Processing**: Asynchronous data processing with progress tracking
+- **Data Archiving**: Automatic archiving of existing records before new data ingestion
+- **Data Export**: Generate comprehensive data dumps for analysis
+
+### Technical Features
+- **Database Integration**: PostgreSQL backend with connection pooling
+- **Big Data Processing**: PySpark integration for large dataset processing
+- **Session Management**: Secure session handling for multi-step workflows
+- **Error Handling**: Comprehensive error logging and user feedback
+- **Progress Tracking**: Real-time progress updates for long-running operations
+
+## Architecture
+
+### Technology Stack
+- **Backend**: Flask (Python web framework)
+- **Database**: PostgreSQL with psycopg2
+- **Data Processing**: Apache Spark (PySpark)
+- **Frontend**: HTML, CSS, JavaScript
+- **Data Handling**: Pandas, SQLAlchemy
+
+### Key Components
+
+#### 1. Database Schema
+- `hospital_address`: Hospital location and contact information
+- `hospital_charges`: Main charge data with pricing information
+- `hospital_charges_archive`: Archived records for audit trail
+- `hospital_log`: Processing logs and audit information
+
+#### 2. Core Classes
+- **SparkManager**: Singleton pattern for Spark session management
+- **BackgroundTask**: Task management for asynchronous processing
+
+#### 3. Processing Workflow
+- **Type 1 Ingestion**: Standard processing workflow for Type 1 data format
+
+## Installation & Setup
+
+### Prerequisites
+- Python 3.7+
+- PostgreSQL database (with existing tables)
+- Apache Spark (for data processing)
+- Java 8+ (required for Spark)
+
+### Dependencies
 ```bash
-pip install -r requirements.txt
+pip install flask flask-cors psycopg2-binary pyspark pandas sqlalchemy
 ```
 
-2. Ensure PostgreSQL is running and create a database named `healthcarepoc`
+### Database Setup
+1. Ensure PostgreSQL database is running
+2. Verify required tables exist in your backend database:
+   - `hospital_address`
+   - `hospital_charges`
+   - `hospital_charges_archive`
+   - `hospital_log`
+3. Configure database connection in environment variables
 
-3. Place the PostgreSQL JDBC driver (`postgresql-42.7.2.jar`) in the root directory
-
-4. Start the application:
+### Environment Variables
 ```bash
-python app.py
+DB_NAME=healthcarepoc
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_HOST=localhost
+DB_PORT=5432
 ```
 
 ## Usage
 
-1. Open a web browser and navigate to `http://localhost:5000`
+### Starting the Application
+```bash
+python app.py
+```
+The application will start on `http://localhost:5001`
 
-2. Select the ingestion strategy and file type
+### Workflow
 
-3. Enter the file path and click "Submit"
+#### 1. File Upload
+- Navigate to the home page
+- Select a CSV file containing hospital charge data (Type 1 format)
+- Provide user information
 
-4. Review the preview data and confirm ingestion
+#### 2. Address Review
+- Review extracted hospital address information
+- Confirm or modify address details
+- Add region and city information
 
-## Project Structure
+#### 3. Data Preview
+- Preview processed charge data
+- Verify column mappings and data transformations
+- Check for any data quality issues
 
-- `app.py`: Main Flask application
-- `index.html`: Web interface
-- `ingestion_strategies/`: Data ingestion strategy implementations
-  - `base_strategy.py`: Base class for ingestion strategies
-  - `type1_strategy.py`: Type 1 ingestion strategy implementation
-- `postgresql-42.7.2.jar`: PostgreSQL JDBC driver
+#### 4. Data Ingestion
+- Initiate background processing
+- Monitor progress through real-time updates
+- Review processing results and statistics
 
-## Database Schema
+#### 5. Data Management
+- Generate data dumps for analysis
+- Archive inactive records
+- View processing logs
 
-### addresses
-- Contains hospital address information
-- First 5 columns from input file
+## API Endpoints
 
-### hospital_charges
-- Contains hospital charge information
-- Columns: hospital_name, code, charge
+### Core Routes
+- `GET /`: Main application page
+- `POST /submit-form`: File upload and initial processing
+- `GET /review-address`: Address review page
+- `GET /review-charges`: Charge data review page
+- `POST /load-address-data`: Save address information
+- `POST /load-charges`: Initiate charge data processing
 
-### hospital_log
-- Logs ingestion attempts
-- Columns: id, user_name, file_type, file_path, ingestion_strategy, ingestion_timestamp, ingestion_status, error_message 
+### Data Management
+- `GET /dump-data`: Data export interface
+- `POST /generate-dump/<table>`: Generate data dumps
+- `GET /download/<filename>`: Download generated files
+- `POST /archive-inactive`: Archive inactive records
+
+### API Endpoints
+- `GET /api/hospitals-list`: Get list of hospitals
+- `GET /preview-data`: Preview processed data
+- `GET /task-status/<task_id>`: Get background task status
+
+## Data Processing
+
+### Type 1 File Structure Requirements
+CSV files must contain:
+1. **Header Row**: Column definitions
+2. **Address Row**: Hospital address information
+3. **Data Header**: Charge data column headers
+4. **Data Rows**: Actual charge data
+
+### Supported Data Types
+- **CPT Codes**: Current Procedural Terminology codes
+- **MS-DRG Codes**: Medicare Severity Diagnosis Related Groups
+- **Standard Charges**: Gross, negotiated, minimum, and maximum charges
+- **Payer Information**: Insurance provider and plan details
+
+### Data Transformations
+- Automatic column mapping and validation
+- Data type conversion and cleaning
+- Duplicate detection and removal
+- Null value handling
+
+## Configuration
+
+### Spark Configuration
+```python
+SparkSession.builder \
+    .appName("Healthcare Data Processing") \
+    .config("spark.driver.memory", "4g") \
+    .config("spark.executor.memory", "4g") \
+    .config("spark.sql.shuffle.partitions", "10")
+```
+
+### Database Configuration
+- Connection pooling (1-20 connections)
+- Automatic connection management
+- Transaction handling with rollback support
+
+## Error Handling
+
+### Comprehensive Error Management
+- File validation errors
+- Database connection issues
+- Data processing failures
+- User input validation
+
+### Logging
+- Structured logging with different levels
+- Error tracking and debugging information
+- Processing audit trails
+
+## Security Features
+
+### Session Management
+- Secure session handling
+- User authentication tracking
+- Session timeout management
+
+### Data Protection
+- Input validation and sanitization
+- SQL injection prevention
+- File upload security
+
+## Performance Optimization
+
+### Database Optimization
+- Connection pooling
+- Prepared statements
+- Index optimization
+- Batch processing
+
+### Data Processing
+- Spark partitioning
+- Memory management
+- Parallel processing
+- Chunked data handling
+
+## Recent Updates
+
+### Code Cleanup (Latest)
+- Removed unused table creation functions
+- Eliminated unused imports and dependencies
+- Streamlined codebase for better maintainability
+- Improved error handling for stored procedures
+
+### Optimizations
+- Reduced memory footprint
+- Faster application startup
+- Cleaner code structure
+- Better error messages
+
+## Monitoring & Maintenance
+
+### Health Checks
+- Database connection monitoring
+- Spark session management
+- Application status tracking
+
+### Cleanup Operations
+- Temporary file cleanup
+- Spark temp directory management
+- Database connection cleanup
+
+## Troubleshooting
+
+### Common Issues
+1. **Database Connection**: Check PostgreSQL service and credentials
+2. **Spark Issues**: Verify Java installation and Spark configuration
+3. **File Processing**: Ensure CSV format compliance (Type 1 format)
+4. **Memory Issues**: Adjust Spark memory settings
+
+### Debug Mode
+Enable debug mode for detailed error information:
+```python
+app.run(host='0.0.0.0', port=5001, debug=True)
+```
+
+## Contributing
+
+### Development Setup
+1. Clone the repository
+2. Install dependencies
+3. Configure database
+4. Run in development mode
+
+### Code Standards
+- Follow PEP 8 Python style guidelines
+- Add comprehensive error handling
+- Include proper documentation
+- Write unit tests for new features
+
