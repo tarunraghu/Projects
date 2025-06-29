@@ -68,7 +68,7 @@ class SparkManager:
         return cls._instance
 
     def get_spark(self):
-        if self._spark is None or self._spark._jsc.sc().isStopped():
+        if self._spark is None:
             self._spark = SparkSession.builder \
                 .appName("Healthcare Data Processing") \
                 .config("spark.driver.memory", "4g") \
@@ -126,7 +126,13 @@ def get_db_connection():
     try:
         if connection_pool:
             return connection_pool.getconn()
-        return psycopg2.connect(**DB_CONFIG)
+        return psycopg2.connect(
+            dbname=DB_CONFIG['dbname'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port']
+        )
     except Exception as e:
         logger.error(f"Error getting database connection: {str(e)}")
         raise
@@ -151,6 +157,8 @@ def test_db_connection():
 # Test database connection on startup
 db_status, db_message = test_db_connection()
 logger.info(f"Database connection test: {db_message}")
+
+# Table creation functions removed - handled by backend code
 
 def create_hospital_data_table():
     """Create the hospital_data table if it doesn't exist"""
@@ -192,39 +200,6 @@ def create_hospital_data_table():
             cur.close()
         if conn:
             return_db_connection(conn)
-
-def create_hospital_address_table():
-    """Create the hospital_address table if it doesn't exist"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS hospital_address (
-            id SERIAL PRIMARY KEY,
-            hospital_name VARCHAR(255) UNIQUE,
-            last_updated_on VARCHAR(50),
-            version VARCHAR(50),
-            hospital_location VARCHAR(255),
-            hospital_address VARCHAR(255),
-            region VARCHAR(255),
-            city VARCHAR(255)
-        );
-        """
-        
-        cur.execute(create_table_query)
-        conn.commit()
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_address table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        return_db_connection(conn)
 
 def create_hospital_charges_table():
     """Create the hospital_charges table with standardized schema"""
@@ -1006,6 +981,12 @@ def submit_form():
         os.makedirs(upload_dir, exist_ok=True)
         
         # Save the uploaded file
+        if file.filename is None:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid filename'
+            }), 400
+            
         file_path = os.path.join(upload_dir, file.filename)
         file.save(file_path)
         
@@ -1218,9 +1199,6 @@ def load_main_data():
     conn = None
     cur = None
     try:
-        # Create hospital_data table if it doesn't exist
-        create_hospital_data_table()
-        
         # Get JSON data from request
         data = request.get_json()
         if not data:
@@ -1639,9 +1617,6 @@ def load_address_data_route():
             
         logger.info(f"Loading address data: {address_data}")
         
-        # Create hospital_address table if it doesn't exist
-        create_hospital_address_table()
-        
         # Load the address data
         load_address_data(address_data)
         
@@ -1721,14 +1696,18 @@ def process_chunks(df, chunk_size=50000, task=None):
             WHERE hospital_name = %s;
         """, (hospital_name,))
         
-        # Delete all records for this hospital
-        cur.execute("""
-            DELETE FROM hospital_charges 
-            WHERE hospital_name = %s;
-        """, (hospital_name,))
+        result = cur.fetchone()
+        count = result[0] if result else 0
         
-        conn.commit()
-        logger.info(f"Successfully archived and removed existing records for hospital: {hospital_name}")
+        if count > 0:
+            # Delete all records for this hospital
+            cur.execute("""
+                DELETE FROM hospital_charges 
+                WHERE hospital_name = %s;
+            """, (hospital_name,))
+            
+            conn.commit()
+            logger.info(f"Successfully archived and removed existing records for hospital: {hospital_name}")
         
     finally:
         if cur:
@@ -1825,11 +1804,6 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.progress = 0
         task.message = 'Starting data ingestion...'
         
-        # Create required tables
-        create_hospital_charges_table()
-        create_hospital_charges_archive_table()
-        create_hospital_log_table()
-        
         task.progress = 10
         task.message = 'Checking for existing data...'
         
@@ -1843,10 +1817,11 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 WHERE hospital_name = %s;
             """, (hospital_name,))
             
-            existing_count = cur.fetchone()[0]
+            result = cur.fetchone()
+            count = result[0] if result else 0
             
-            if existing_count > 0:
-                task.message = f'Archiving {existing_count} existing records...'
+            if count > 0:
+                task.message = f'Archiving {count} existing records...'
                 archived_count = archive_hospital_records(hospital_name)
                 log_data['archived_records'] = archived_count
                 task.progress = 20
@@ -2141,51 +2116,6 @@ def task_status(task_id):
             'error': str(e)
         }), 500
 
-def create_hospital_charges_type2_table():
-    """Create the hospital_charges_type2 table for Type 2 ingestion"""
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Drop the table if it exists to ensure clean schema
-        cur.execute("DROP TABLE IF EXISTS hospital_charges_type2;")
-        
-        create_table_query = """
-        CREATE TABLE hospital_charges_type2 (
-            id SERIAL PRIMARY KEY,
-            hospital_name TEXT,
-            description TEXT,
-            code VARCHAR(50),
-            code_type VARCHAR(50),
-            payer_name VARCHAR(255),
-            plan_name VARCHAR(255),
-            standard_charge_gross NUMERIC(38,18),
-            standard_charge_negotiated_dollar NUMERIC(38,18),
-            standard_charge_min NUMERIC(38,18),
-            standard_charge_max NUMERIC(38,18),
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        
-        cur.execute(create_table_query)
-        conn.commit()
-        
-        logger.info("Successfully created hospital_charges_type2 table")
-        
-    except Exception as e:
-        logger.error(f"Error creating hospital_charges_type2 table: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            return_db_connection(conn)
-
 def create_hospital_charges_type2_archive_table():
     """Create the hospital_charges_type2_archive table for Type 2 ingestion"""
     conn = None
@@ -2230,6 +2160,56 @@ def create_hospital_charges_type2_archive_table():
             cur.close()
         if conn:
             return_db_connection(conn)
+
+def process_file(data_file):
+    """Process the data file and return result"""
+    try:
+        # Get ingestion strategy from session
+        ingestion_strategy = session.get('ingestion_strategy', 'type1')
+        
+        # Get Spark session
+        spark_manager = SparkManager.get_instance()
+        spark = spark_manager.get_spark()
+        
+        # Read the CSV file
+        df = spark.read \
+            .option("header", "true") \
+            .option("inferSchema", "true") \
+            .option("mode", "PERMISSIVE") \
+            .option("nullValue", "NaN") \
+            .option("encoding", "UTF-8") \
+            .option("emptyValue", "") \
+            .option("treatEmptyValuesAsNulls", "true") \
+            .csv(data_file)
+        
+        if df is None:
+            return {'error': 'Failed to read CSV file: DataFrame is None'}
+        
+        # Get total records
+        total_records = df.count()
+        if total_records == 0:
+            return {'error': 'CSV file is empty or contains no valid records'}
+        
+        # Process data
+        processed_df = process_hospital_data(df, ingestion_strategy, spark)
+        
+        if processed_df is None:
+            return {'error': 'Failed to process hospital data: Processed DataFrame is None'}
+        
+        # Get unique records count
+        unique_records = processed_df.count()
+        
+        return {
+            'success': True,
+            'total_records': total_records,
+            'unique_records': unique_records,
+            'message': f'Successfully processed {unique_records:,} records'
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing file: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {'error': str(e)}
 
 @app.route('/confirm-address', methods=['POST'])
 def confirm_address():
@@ -2455,7 +2435,7 @@ def generate_table_dump(table):
             # Get column names once - these will be used as headers for all files
             query = f"SELECT * FROM {table} LIMIT 0"  # Get column names without fetching data
             cur.execute(query)
-            headers = [desc[0] for desc in cur.description]
+            headers = [desc[0] for desc in cur.description] if cur.description else []
             logger.info(f"Headers for {table}: {headers}")
             
             # Get total count for progress calculation
@@ -2463,7 +2443,8 @@ def generate_table_dump(table):
             if table == 'hospital_charges':
                 count_query += " WHERE is_active = TRUE"
             cur.execute(count_query)
-            total_rows = cur.fetchone()[0]
+            result = cur.fetchone()
+            total_rows = result[0] if result else 0
             
             # Build main query
             query = f"SELECT * FROM {table}"
@@ -2805,8 +2786,8 @@ def archive_inactive_records():
             FROM hospital_charges 
             WHERE is_active = FALSE;
         """)
-        
-        count = cur.fetchone()[0]
+        result = cur.fetchone()
+        count = result[0] if result else 0
         
         if count > 0:
             # Archive inactive records

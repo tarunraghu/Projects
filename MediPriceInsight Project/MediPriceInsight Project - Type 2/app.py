@@ -5,7 +5,6 @@ import psycopg2
 from psycopg2 import pool
 import json
 from datetime import datetime
-from ingestion_strategies.type1_strategy import Type1IngestionStrategy
 import os
 import traceback
 import csv
@@ -23,9 +22,6 @@ from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, monotonically_increasing_id, spark_partition_id
 import re
 import shutil
-import stat
-import uuid
-import gzip
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
