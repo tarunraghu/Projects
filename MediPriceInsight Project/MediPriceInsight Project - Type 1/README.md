@@ -14,7 +14,6 @@ MediPriceInsight is a Flask-based web application designed to process and manage
 - **Data Preview**: Preview data before ingestion to ensure accuracy
 - **Background Processing**: Asynchronous data processing with progress tracking
 - **Data Archiving**: Automatic archiving of existing records before new data ingestion
-- **Data Export**: Generate comprehensive data dumps for analysis
 
 ### Technical Features
 - **Database Integration**: PostgreSQL backend with connection pooling
@@ -109,9 +108,8 @@ The application will start on `http://localhost:5001`
 - Review processing results and statistics
 
 #### 5. Data Management
-- Generate data dumps for analysis
-- Archive inactive records
-- View processing logs
+- All data management is handled automatically by the application, including archiving of existing records before new data is ingested.
+- Processing logs are maintained for audit and troubleshooting purposes.
 
 ## Data Processing
 
@@ -189,7 +187,6 @@ SparkSession.builder \
 - Parallel processing
 - Chunked data handling
 
-
 ## Monitoring & Maintenance
 
 ### Health Checks
@@ -198,35 +195,10 @@ SparkSession.builder \
 - Application status tracking
 
 ### Cleanup Operations
-- Temporary file cleanup
-- Spark temp directory management
-- Database connection cleanup
+- Temporary file and directory cleanup on startup
+- Automatic management of Spark temp directories
 
-## Troubleshooting
+## License
 
-### Common Issues
-1. **Database Connection**: Check PostgreSQL service and credentials
-2. **Spark Issues**: Verify Java installation and Spark configuration
-3. **File Processing**: Ensure CSV format compliance (Type 1 format)
-4. **Memory Issues**: Adjust Spark memory settings
-
-### Debug Mode
-Enable debug mode for detailed error information:
-```python
-app.run(host='0.0.0.0', port=5001, debug=True)
-```
-
-## Contributing
-
-### Development Setup
-1. Clone the repository
-2. Install dependencies
-3. Configure database
-4. Run in development mode
-
-### Code Standards
-- Follow PEP 8 Python style guidelines
-- Add comprehensive error handling
-- Include proper documentation
-- Write unit tests for new features
+This project is for demonstration and internal use only.
 
