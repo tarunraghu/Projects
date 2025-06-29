@@ -9,7 +9,8 @@ from datetime import datetime
 class FlaskAppManager:
     def __init__(self):
         self.processes = {}
-        self.base_dir = r"C:\Users\tarun\Downloads\tarunraghu.github.io\Projects\MediPriceInsight Project"
+        # Use the current working directory as the base directory
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.apps = [
             {
                 "name": "Main Application",
@@ -53,8 +54,10 @@ class FlaskAppManager:
         """Start a Flask application and store its process"""
         print(f"Starting {app['name']} on port {app['port']}...")
         try:
+            # Use main_app.py for the main application, app.py for others
+            app_file = 'main_app.py' if app['name'] == 'Main Application' else 'app.py'
             process = subprocess.Popen(
-                ['python', 'app.py'],
+                ['python', app_file],
                 cwd=app['directory'],
                 creationflags=subprocess.CREATE_NO_WINDOW  # Run in background
             )
