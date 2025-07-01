@@ -1,0 +1,75 @@
+MEDIPRICEINSIGHT APPLICATION - RUNNING INSTRUCTIONS
+==================================================
+
+PREREQUISITES:
+- Python 3.7 or higher installed
+- Required Python packages (install using: pip install -r requirements.txt)
+- All project files in the correct directory structure
+
+STEP 1: OPEN COMMAND PROMPT
+---------------------------
+1. Press Windows + R
+2. Type "cmd" and press Enter
+3. Navigate to your project directory:
+   cd "C:\Users\Docker\Documents\GitHub\Projects\MediPriceInsight Project"
+
+STEP 2: START ALL APPLICATIONS
+------------------------------
+Run the following command to start all applications:
+python start_all_apps.py
+
+This will start:
+- Main Application (Homepage): http://localhost:5000
+- Type 1 CSV Direct Ingestion: http://localhost:5001
+- Type 2 CSV Pivot Ingestion: http://localhost:5002
+- Type 3 JSON Direct Ingestion: http://localhost:5003
+- Data Dump Application: http://localhost:5004
+- Price Transparency Report: http://localhost:5005
+
+STEP 3: ACCESS THE APPLICATIONS
+-------------------------------
+1. Open your web browser
+2. Visit http://localhost:5000 for the main homepage
+3. Use the homepage to navigate to different applications
+4. Or directly access individual applications at their respective ports
+
+STEP 4: APPLICATION MANAGEMENT
+-----------------------------
+While the applications are running, you can use these commands in the terminal:
+- 'status' - Show current status of all applications
+- 'restart' - Restart all applications
+- 'stop' - Stop all applications
+- 'exit' - Stop all applications and exit
+- 'help' - Show available commands
+
+STEP 5: TROUBLESHOOTING
+----------------------
+If you encounter issues:
+
+1. Directory Name Invalid Error:
+   - Make sure you're in the correct project directory
+   - All paths are now dynamic and should work from any location
+
+2. Port Already in Use:
+   - Stop any existing applications first
+   - Use 'netstat -ano | findstr :5000' to check if ports are in use
+
+3. Application Not Loading:
+   - Check if all applications started successfully
+   - Verify the correct ports are being used
+   - Check browser console for any JavaScript errors
+
+STEP 6: STOPPING APPLICATIONS
+-----------------------------
+To stop all applications:
+1. In the terminal where you ran start_all_apps.py, type 'stop'
+2. Or press Ctrl+C to stop all applications
+3. Or type 'exit' to stop and close the terminal
+
+NOTES:
+- All applications use dynamic paths and should work from any directory
+- The main homepage (port 5000) serves the existing index.html template
+- Each application runs independently on its own port
+- Make sure all required dependencies are installed before running
+
+For additional help, check the README.md files in each application directory.
