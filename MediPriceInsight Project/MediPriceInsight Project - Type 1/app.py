@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import uuid
+import itertools
 
 app = Flask(__name__)  # Initialize Flask app with default template folder
 CORS(app)  # Enable CORS for all routes
@@ -300,53 +301,45 @@ def detect_file_encoding(file_path):
     return 'cp1252'
 
 def split_csv_file(file_path, ingestion_strategy='type1'):
-    """Split the CSV file into address and data files"""
+    """Split the CSV file into address and data files (streaming, memory-efficient)."""
     try:
         # Get the directory and filename from the path
         directory = os.path.dirname(file_path)
         base_filename = os.path.splitext(os.path.basename(file_path))[0]
-        
+
         # Create paths for split files
         address_file = os.path.join(directory, f"{base_filename}_address.csv")
         data_file = os.path.join(directory, f"{base_filename}_charges.csv")
-        
+
         # Detect file encoding
         file_encoding = detect_file_encoding(file_path)
         logger.info(f"Detected file encoding: {file_encoding}")
-        
-        # Read the original CSV file with detected encoding
-        with open(file_path, 'r', encoding=file_encoding, errors='replace') as csvfile:
-            reader = csv.reader(csvfile)
-            all_rows = list(reader)
-            
-            # Validate file structure
-            if len(all_rows) < 4:
-                raise ValueError(f"CSV file must have at least 4 rows. Found only {len(all_rows)} rows.")
-            
-            # Get header row (first row) and data row (second row)
-            header_row = all_rows[0]
-            address_row = all_rows[1]
-            
-            # Check if first column is blank in both header and data
-            if (not header_row[0].strip() and len(header_row) > 1 and 
+
+        with open(file_path, 'r', encoding=file_encoding, errors='replace') as infile:
+            reader = csv.reader(infile)
+            # Read the first three rows only
+            header_row = next(reader, None)
+            address_row = next(reader, None)
+            data_header = next(reader, None)
+
+            if not header_row or not address_row or not data_header:
+                raise ValueError("CSV file must have at least 3 rows (header, address, data header)")
+
+            # Check if first column is blank in both header and address
+            if (not header_row[0].strip() and len(header_row) > 1 and
                 (len(address_row) == 0 or (len(address_row) > 0 and not address_row[0].strip()))):
-                # Remove first column from both rows
                 header_row = header_row[1:]
                 if len(address_row) > 0:
                     address_row = address_row[1:]
-            
+
             # Map header columns to expected order
             expected_columns = ['hospital_name', 'last_updated_on', 'version', 'hospital_location', 'hospital_address']
             column_mapping = {}
-            
-            # Clean header names and create mapping
             clean_headers = [h.strip().lower().replace(' ', '_') for h in header_row]
-            
-            # Try to match headers with expected columns
             for expected_col in expected_columns:
                 found = False
                 for idx, header in enumerate(clean_headers):
-                    if (expected_col in header or 
+                    if (expected_col in header or
                         (expected_col == 'hospital_name' and 'hospital' in header) or
                         (expected_col == 'last_updated_on' and 'last_updat' in header) or
                         (expected_col == 'hospital_location' and 'location' in header) or
@@ -356,42 +349,36 @@ def split_csv_file(file_path, ingestion_strategy='type1'):
                         break
                 if not found:
                     column_mapping[expected_col] = None
-            
-            # Create aligned address row using the mapping
             aligned_address = [''] * 5
             for idx, col in enumerate(expected_columns):
                 if column_mapping[col] is not None and column_mapping[col] < len(address_row):
                     aligned_address[idx] = address_row[column_mapping[col]]
-            
-            # Write address data with UTF-8 encoding
+
+            # Write address file
             with open(address_file, 'w', newline='', encoding='utf-8') as addrfile:
                 writer = csv.writer(addrfile)
                 writer.writerow(['hospital_name', 'last_updated_on', 'version', 'hospital_location', 'hospital_address'])
                 writer.writerow(aligned_address)
-            
-            # Write data rows with UTF-8 encoding
+
+            # Prepare data header
+            if not data_header[0].strip():
+                data_header = data_header[1:]
+            clean_data_header = [col.strip() if col else f"_c{i}" for i, col in enumerate(data_header)]
+
+            # Write data file (streaming rows)
             with open(data_file, 'w', newline='', encoding='utf-8') as datafile:
                 writer = csv.writer(datafile)
-                
-                # Get the header row for data (row 3, index 2)
-                data_header = all_rows[2]
-                if not data_header[0].strip():
-                    data_header = data_header[1:]  # Remove blank first column
-                clean_header = [col.strip() if col else f"_c{i}" for i, col in enumerate(data_header)]
-                writer.writerow(clean_header)
-                
-                # Write all subsequent rows, handling blank first columns
-                for row in all_rows[3:]:
+                writer.writerow(clean_data_header)
+                for row in reader:
                     if len(row) > 0 and not row[0].strip():
-                        row = row[1:]  # Remove blank first column
-                    # Clean any problematic characters
+                        row = row[1:]
                     cleaned_row = [str(cell).replace('\x00', '').strip() for cell in row]
                     writer.writerow(cleaned_row)
-            
-            logger.info(f"Successfully split files into:\nAddress file: {address_file}\nData file: {data_file}")
-            logger.info(f"Address data: {aligned_address}")
-            return address_file, data_file
-            
+
+        logger.info(f"Successfully split files into:\nAddress file: {address_file}\nData file: {data_file}")
+        logger.info(f"Address data: {aligned_address}")
+        return address_file, data_file
+
     except Exception as e:
         logger.error(f"Error splitting CSV file: {str(e)}")
         logger.error(traceback.format_exc())

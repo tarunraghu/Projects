@@ -62,33 +62,44 @@ class SparkManager:
         return cls._instance
 
     def get_spark(self):
-        if self._spark is None or self._spark._jsc.sc().isStopped():
-            self._spark = SparkSession.builder \
-                .appName("Healthcare Data Processing") \
-                .config("spark.driver.memory", "4g") \
-                .config("spark.executor.memory", "4g") \
-                .config("spark.sql.shuffle.partitions", "10") \
-                .config("spark.network.timeout", "600s") \
-                .config("spark.executor.heartbeatInterval", "60s") \
-                .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-                .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-                .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-                .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-                .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "LEGACY") \
-                .config("spark.sql.legacy.parquet.datetimeRebaseModeInRead", "LEGACY") \
-                .config("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY") \
-                .config("spark.sql.legacy.parquet.int96RebaseModeInRead", "LEGACY") \
-                .config("spark.datasource.postgresql.url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
-                .config("spark.datasource.postgresql.user", DB_CONFIG['user']) \
-                .config("spark.datasource.postgresql.password", DB_CONFIG['password']) \
-                .getOrCreate()
+        try:
+            if self._spark is None or self._spark._sc is None or self._spark._jsc.sc().isStopped():
+                logger.info("Creating new Spark session")
+                self._spark = SparkSession.builder \
+                    .appName("Healthcare Data Processing") \
+                    .config("spark.driver.memory", "4g") \
+                    .config("spark.executor.memory", "4g") \
+                    .config("spark.sql.shuffle.partitions", "10") \
+                    .config("spark.network.timeout", "600s") \
+                    .config("spark.executor.heartbeatInterval", "60s") \
+                    .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+                    .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+                    .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
+                    .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+                    .config("spark.sql.legacy.parquet.datetimeRebaseModeInWrite", "LEGACY") \
+                    .config("spark.sql.legacy.parquet.datetimeRebaseModeInRead", "LEGACY") \
+                    .config("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY") \
+                    .config("spark.sql.legacy.parquet.int96RebaseModeInRead", "LEGACY") \
+                    .config("spark.datasource.postgresql.url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
+                    .config("spark.datasource.postgresql.user", DB_CONFIG['user']) \
+                    .config("spark.datasource.postgresql.password", DB_CONFIG['password']) \
+                    .getOrCreate()
+                
+                logger.info("Spark session created successfully")
             
-        return self._spark
+            return self._spark
+        except Exception as e:
+            logger.error(f"Error creating Spark session: {str(e)}")
+            raise
 
     def stop_spark(self):
         if self._spark:
             self._spark.stop()
             self._spark = None
+    
+    def is_spark_valid(self):
+        """Check if the current Spark session is valid"""
+        return self._spark is not None and self._spark._sc is not None and not self._spark._jsc.sc().isStopped()
 
 # Database configuration
 DB_CONFIG = {
@@ -397,6 +408,16 @@ def process_hospital_data(df, ingestion_strategy='type1', spark=None):
     """Process the DataFrame to extract required columns"""
     try:
         from pyspark.sql.functions import round as spark_round, col, trim, upper, count, when, lit, split, element_at, explode, array, struct, expr, regexp_replace
+        
+        # Ensure we have a valid Spark session
+        spark_manager = SparkManager.get_instance()
+        if spark is None or not spark_manager.is_spark_valid():
+            logger.warning("Spark session is None or stopped, getting new session from manager")
+            spark = spark_manager.get_spark()
+        
+        # Double-check that we have a valid Spark session
+        if spark is None or not spark_manager.is_spark_valid():
+            raise ValueError("Unable to obtain a valid Spark session")
         
         if ingestion_strategy == 'type2':
             # Log all columns for debugging
@@ -897,16 +918,13 @@ def preview_data():
                 'error': f'Data file not found: {data_file}'
             }), 400
         
-        # Create Spark session for processing
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Preview") \
-            .config("spark.driver.memory", "2g") \
-            .config("spark.executor.memory", "2g") \
-            .config("spark.sql.shuffle.partitions", "5") \
-            .config("spark.network.timeout", "300s") \
-            .config("spark.executor.heartbeatInterval", "60s") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .getOrCreate()
+        # Get Spark session from manager
+        spark = SparkManager.get_instance().get_spark()
+        
+        # Verify Spark session is valid
+        spark_manager = SparkManager.get_instance()
+        if spark is None or not spark_manager.is_spark_valid():
+            raise ValueError("Unable to obtain a valid Spark session")
         
         try:
             # Read CSV file with Spark
@@ -960,8 +978,8 @@ def preview_data():
             })
             
         finally:
-            # Stop Spark session
-            spark.stop()
+            # Don't stop the Spark session here as it's managed by SparkManager
+            pass
         
     except Exception as e:
         logger.error(f"Error getting data preview: {str(e)}")
@@ -1088,16 +1106,13 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.progress = 30
         task.message = 'Reading and processing data file...'
 
-        # Create Spark session
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Processing") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.sql.shuffle.partitions", "10") \
-            .config("spark.network.timeout", "600s") \
-            .config("spark.executor.heartbeatInterval", "60s") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .getOrCreate()
+        # Get Spark session from manager
+        spark = SparkManager.get_instance().get_spark()
+        
+        # Verify Spark session is valid
+        spark_manager = SparkManager.get_instance()
+        if spark is None or not spark_manager.is_spark_valid():
+            raise ValueError("Unable to obtain a valid Spark session")
             
         try:
             # Read CSV file
@@ -1204,8 +1219,8 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
                 return_db_connection(conn)
                 
         finally:
-            if spark:
-                spark.stop()
+            # Don't stop the Spark session here as it's managed by SparkManager
+            pass
                 
     except Exception as e:
         end_time = datetime.now()
