@@ -52,37 +52,65 @@ class BackgroundTask:
 class SparkManager:
     _instance = None
     _spark = None
+    _lock = threading.Lock()
 
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def get_spark(self):
-        if self._spark is None:
-            self._spark = SparkSession.builder \
-                .appName("Healthcare Data Processing") \
-                .config("spark.driver.memory", "4g") \
-                .config("spark.executor.memory", "4g") \
-                .config("spark.sql.shuffle.partitions", "10") \
-                .config("spark.network.timeout", "600s") \
-                .config("spark.executor.heartbeatInterval", "60s") \
-                .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-                .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-                .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-                .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-                .config("spark.datasource.postgresql.url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
-                .config("spark.datasource.postgresql.user", DB_CONFIG['user']) \
-                .config("spark.datasource.postgresql.password", DB_CONFIG['password']) \
-                .getOrCreate()
-            
-        return self._spark
+        with self._lock:
+            try:
+                if self._spark is None or self._spark._sc._jsc.sc().isStopped():
+                    # Create a new Spark session if none exists or if the current one is stopped
+                    self._spark = SparkSession.builder \
+                        .appName("Healthcare Data Processing") \
+                        .config("spark.driver.memory", "4g") \
+                        .config("spark.executor.memory", "4g") \
+                        .config("spark.sql.shuffle.partitions", "10") \
+                        .config("spark.network.timeout", "600s") \
+                        .config("spark.executor.heartbeatInterval", "60s") \
+                        .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+                        .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+                        .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
+                        .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+                        .config("spark.datasource.postgresql.url", f"jdbc:postgresql://{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}") \
+                        .config("spark.datasource.postgresql.user", DB_CONFIG['user']) \
+                        .config("spark.datasource.postgresql.password", DB_CONFIG['password']) \
+                        .getOrCreate()
+                    logger.info("Created new Spark session")
+                return self._spark
+            except Exception as e:
+                logger.error(f"Error creating Spark session: {str(e)}")
+                # Reset the session and try again
+                self._spark = None
+                raise
 
     def stop_spark(self):
-        if self._spark:
-            self._spark.stop()
-            self._spark = None
+        with self._lock:
+            try:
+                if self._spark and not self._spark._sc._jsc.sc().isStopped():
+                    self._spark.stop()
+                    self._spark = None
+                    logger.info("Stopped Spark session")
+            except Exception as e:
+                logger.error(f"Error stopping Spark session: {str(e)}")
+                # Reset the session reference even if stopping failed
+                self._spark = None
+
+    def is_spark_active(self):
+        """Check if the Spark session is active"""
+        with self._lock:
+            try:
+                return (self._spark is not None and 
+                       not self._spark._sc._jsc.sc().isStopped())
+            except Exception as e:
+                logger.error(f"Error checking Spark status: {str(e)}")
+                return False
 
 # Database configuration
 DB_CONFIG = {
@@ -898,13 +926,9 @@ def ingest_data():
                 'error': 'File path not found in session'
             })
         
-        # Create Spark session
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Processing") \
-            .config("spark.jars", "postgresql-42.7.2.jar") \
-            .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .getOrCreate()
+        # Get Spark session from manager
+        spark_manager = SparkManager.get_instance()
+        spark = spark_manager.get_spark()
         
         try:
             # Read the CSV file
@@ -946,7 +970,8 @@ def ingest_data():
             })
             
         finally:
-            spark.stop()
+            # Don't stop Spark here - let the manager handle it
+            pass
             
     except Exception as e:
         logger.error(f"Error ingesting data: {str(e)}")
@@ -981,14 +1006,9 @@ def load_main_data():
             
         normalized_path = validate_file_path(data_file)
         
-        # Create Spark session
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Processing") \
-            .config("spark.jars", "postgresql-42.7.2.jar") \
-            .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .getOrCreate()
+        # Get Spark session from manager
+        spark_manager = SparkManager.get_instance()
+        spark = spark_manager.get_spark()
         
         try:
             # Read the CSV file with first row as header
@@ -1029,7 +1049,8 @@ def load_main_data():
             })
             
         finally:
-            spark.stop()
+            # Don't stop Spark here - let the manager handle it
+            pass
             
     except Exception as e:
         logger.error(f"Error loading main data: {str(e)}")
@@ -1451,16 +1472,9 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
         task.progress = 30
         task.message = 'Reading and processing data file...'
 
-        # Create Spark session
-        spark = SparkSession.builder \
-            .appName("Healthcare Data Processing") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.sql.shuffle.partitions", "10") \
-            .config("spark.network.timeout", "600s") \
-            .config("spark.executor.heartbeatInterval", "60s") \
-            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
-            .getOrCreate()
+        # Get Spark session from manager
+        spark_manager = SparkManager.get_instance()
+        spark = spark_manager.get_spark()
             
         try:
             # Read CSV file
@@ -1574,8 +1588,8 @@ def process_hospital_charges(data_file, hospital_name, task_id, user_name='syste
             }
             
         finally:
-            if spark:
-                spark.stop()
+            # Don't stop Spark here - let the manager handle it
+            pass
                 
     except Exception as e:
         end_time = datetime.now()
@@ -2050,6 +2064,87 @@ def archive_inactive_records_route():
             'success': False,
             'error': str(e)
         }), 500
+
+@app.route('/spark-status')
+def spark_status():
+    """Get the status of the Spark session"""
+    try:
+        spark_manager = SparkManager.get_instance()
+        is_active = spark_manager.is_spark_active()
+        
+        return jsonify({
+            'success': True,
+            'spark_active': is_active,
+            'message': 'Spark session is active' if is_active else 'Spark session is not active'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting Spark status: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/restart-spark', methods=['POST'])
+def restart_spark():
+    """Restart the Spark session"""
+    try:
+        spark_manager = SparkManager.get_instance()
+        
+        # Stop current session if active
+        if spark_manager.is_spark_active():
+            logger.info("Stopping current Spark session...")
+            spark_manager.stop_spark()
+        
+        # Create new session
+        logger.info("Creating new Spark session...")
+        spark = spark_manager.get_spark()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Spark session restarted successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error restarting Spark: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+import signal
+import atexit
+
+def cleanup_resources():
+    """Clean up resources when the application shuts down"""
+    try:
+        # Stop Spark session
+        spark_manager = SparkManager.get_instance()
+        if spark_manager.is_spark_active():
+            logger.info("Stopping Spark session during cleanup...")
+            spark_manager.stop_spark()
+        
+        # Close database connection pool
+        global connection_pool
+        if connection_pool:
+            logger.info("Closing database connection pool...")
+            connection_pool.closeall()
+            connection_pool = None
+            
+        logger.info("Cleanup completed successfully")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}")
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logger.info(f"Received signal {signum}, shutting down gracefully...")
+    cleanup_resources()
+    exit(0)
+
+# Register cleanup function and signal handlers
+atexit.register(cleanup_resources)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Start the Flask application
 if __name__ == '__main__':

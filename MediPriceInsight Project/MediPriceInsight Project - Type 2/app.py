@@ -876,6 +876,101 @@ def preview_address():
             'error': str(e)
         }), 500
 
+@app.route('/preview-data')
+def preview_data():
+    """Endpoint to get charges data for preview"""
+    try:
+        # Get data file path and ingestion strategy from session
+        data_file = session.get('data_file')
+        ingestion_strategy = session.get('ingestion_strategy', 'type1')
+        
+        if not data_file:
+            return jsonify({
+                'success': False,
+                'error': 'No data file found in session'
+            }), 400
+        
+        # Check if file exists
+        if not os.path.exists(data_file):
+            return jsonify({
+                'success': False,
+                'error': f'Data file not found: {data_file}'
+            }), 400
+        
+        # Create Spark session for processing
+        spark = SparkSession.builder \
+            .appName("Healthcare Data Preview") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.executor.memory", "2g") \
+            .config("spark.sql.shuffle.partitions", "5") \
+            .config("spark.network.timeout", "300s") \
+            .config("spark.executor.heartbeatInterval", "60s") \
+            .config("spark.jars", os.path.abspath("postgresql-42.7.2.jar")) \
+            .getOrCreate()
+        
+        try:
+            # Read CSV file with Spark
+            df = spark.read \
+                .option("header", "true") \
+                .option("inferSchema", "true") \
+                .option("mode", "PERMISSIVE") \
+                .option("nullValue", "NaN") \
+                .option("encoding", "UTF-8") \
+                .option("emptyValue", "") \
+                .option("treatEmptyValuesAsNulls", "true") \
+                .csv(data_file)
+            
+            if df is None:
+                raise ValueError("Failed to read CSV file: DataFrame is None")
+            
+            # Get total records
+            total_rows = df.count()
+            if total_rows == 0:
+                raise ValueError("CSV file is empty or contains no valid records")
+            
+            # Process data using the same transformation logic
+            processed_df = process_hospital_data(df, ingestion_strategy, spark)
+            
+            if processed_df is None:
+                raise ValueError("Failed to process hospital data: Processed DataFrame is None")
+            
+            # Get the transformed columns
+            headers = processed_df.columns
+            
+            # Take first 5 rows for preview
+            preview_df = processed_df.limit(5)
+            
+            # Convert to list of dictionaries for JSON serialization
+            preview_data = []
+            for row in preview_df.collect():
+                row_dict = {}
+                for i, value in enumerate(row):
+                    # Handle None values and convert to string for JSON
+                    if value is None:
+                        row_dict[headers[i]] = ""
+                    else:
+                        row_dict[headers[i]] = str(value)
+                preview_data.append(row_dict)
+            
+            return jsonify({
+                'success': True,
+                'headers': headers,
+                'preview_data': preview_data,
+                'total_rows': total_rows
+            })
+            
+        finally:
+            # Stop Spark session
+            spark.stop()
+        
+    except Exception as e:
+        logger.error(f"Error getting data preview: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/load-address-data', methods=['POST'])
 def load_address_data_route():
     """Endpoint to load address data into PostgreSQL"""
@@ -1509,6 +1604,17 @@ def archive_inactive_records_route():
             'success': False,
             'error': str(e)
         }), 500
+
+
+
+
+if __name__ == '__main__':
+    # Start the background task processor thread
+    task_processor = threading.Thread(target=process_task_queue, daemon=True)
+    task_processor.start()
+    
+    # Start the Flask development server
+    app.run(debug=True, host='0.0.0.0', port=5002)
 
 
 
