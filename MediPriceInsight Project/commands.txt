@@ -1,0 +1,41 @@
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project
+
+python start_all_apps.py
+
+pip install psutil==7.0.0
+
+
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 1
+
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 2
+
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project\MediPriceInsight Project - Type 3
+
+
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project\Price Transparency Report
+
+cd C:\Users\vboxuser\Documents\GitHub\Projects\MediPriceInsight Project\Request Data Dump
+
+python app.py
+
+vboxuser folder:
+
+pip install psutil==7.0.0
+
+pip install flask==3.0.2
+
+pip install flask-cors==5.0.1
+
+pip install psycopg2-binary==2.9.10
+
+pip install pyspark==3.2.0
+
+pip install pandas==2.2.3
+
+pip install SQLAlchemy==2.0.39
+
+pip install setuptools
+
+pip install flask-caching
+
+pip install requests
