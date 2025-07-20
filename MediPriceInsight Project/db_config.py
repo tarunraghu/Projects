@@ -7,7 +7,7 @@ DB_CONFIG = {
     'host': 'localhost',
     'database': 'healthcarepoc',
     'user': 'postgres',
-    'password': 'admin',
+    'password': 'Consis10C!',
     'port': '5432'
 }
 
